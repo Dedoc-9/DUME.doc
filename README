@@ -1,203 +1,253 @@
-# DUME Hybrid Engine By Daniel J. Dillberg
+# DUME — Deterministic Unified Manifold Engine  
+**Author:** Daniel J. Dillberg  
 
-**Deterministic Unified Manifold Engine (DUME)** is a high-performance vector ingestion and retrieval system designed for **predictable behavior, adaptive compression, and manifold-aware learning**.
+DUME is a high-performance vector ingestion, compression, and retrieval system designed around **deterministic computation, manifold-aware structure learning, and verifiable system state evolution**.
 
-It provides two interchangeable execution models:
+It supports three coordinated components:
 
-* **Strict Engine** → fully deterministic, replayable, distributed-safe
-* **Hybrid Engine** → adaptive, performance-optimized, and fault-tolerant
-
----
-
-## Core Concepts
-
-DUME is built around a few non-negotiable principles:
-
-* **Deterministic envelopes** as the source of truth
-* **Sparse compression** for storage efficiency
-* **Speculative reconstruction** to improve vector continuity
-* **Graph-based manifold learning** for structural awareness
-* **Graceful degradation** (hybrid mode) or **strict guarantees** (strict mode)
+- **DUME Hybrid Engine** → adaptive, high-throughput, fault-tolerant  
+- **DUME Strict Engine** → deterministic, replayable, distributed-safe  
+- **DUMEgov Layer** → cryptographic audit, policy enforcement, and tamper-evident verification  
 
 ---
 
-## Architecture Overview
+# System Overview
 
-```
-          ┌──────────────┐
-          │   INGEST     │
-          └──────┬───────┘
-                 ↓
-        ┌──────────────────┐
-        │ Speculation Layer │
-        └──────────────────┘
-                 ↓
-        ┌──────────────────┐
-        │ Compression Layer │
-        └──────────────────┘
-                 ↓
-        ┌──────────────────┐
-        │ Deterministic     │
-        │   Envelope        │
-        └──────────────────┘
-                 ↓
-        ┌──────────────────┐
-        │   Storage Layer   │
-        └──────────────────┘
-                 ↓
-        ┌──────────────────┐
-        │ Index + Graph     │
-        └──────────────────┘
-```
+DUME is built on a core principle:
+
+> System state must be either deterministic, reproducible, or verifiable after execution.
+
+This is achieved through a separation of concerns:
+        ┌──────────────────────────┐
+        │      DUMEgov Layer       │
+        │ (Audit + Policy + Proof) │
+        └────────────┬─────────────┘
+                     │
+        ┌────────────▼────────────┐
+        │   DUME Engine Layer     │
+        │ Strict OR Hybrid Engine │
+        └────────────┬────────────┘
+                     │
+        ┌────────────▼────────────┐
+        │ Storage + Compression   │
+        │ + Indexing Layer        │
+        └─────────────────────────┘
 
 ---
 
-## Engine Variants
+# Core Design Principles
 
-### 1. Strict Engine (`DUMEStrictEngine`)
-
-The strict engine prioritizes **correctness and reproducibility over flexibility**.
-
-#### Guarantees
-
-* Deterministic ingest order (monotonic clock)
-* Replayable state from log
-* No hidden mutation or runtime injection
-* Ordered CRDT-based global synchronization
-* Fixed blending and projection rules
-
-#### Characteristics
-
-* All subsystems are always present
-* No optional fallbacks
-* No detached async writes
-* Manifold projection is enforced during ingest
-
-#### Use Cases
-
-* Distributed systems requiring consistency
-* Auditability / compliance pipelines
-* Scientific or reproducible ML workflows
-* Multi-node synchronization
+- **Deterministic Envelopes** → canonical system state representation  
+- **Sparse Compression** → efficient vector storage  
+- **Speculative Reconstruction** → optional predictive continuity  
+- **Manifold Structure Learning** → graph-based organization  
+- **Verifiable Execution Boundaries** → strict separation of compute and audit  
 
 ---
 
-### 2. Hybrid Engine (`DUMEHybridEngine`)
+# Engine Architecture
 
-The hybrid engine prioritizes **adaptability and performance under real-world conditions**.
+## 1. DUME Strict Engine
 
-#### Features
+The Strict Engine prioritizes correctness and reproducibility.
 
-* Optional subsystems (speculation, evolution, burst protection)
-* Approximate nearest neighbor indexing
-* Graceful degradation if components fail
-* Tiered storage support (hot + cold)
-* Gossip-based eventual consistency
+### Guarantees
+- Monotonic deterministic ordering  
+- Fully replayable system state  
+- No hidden mutation paths  
+- Ordered CRDT-based consistency  
+- Enforced manifold projection at ingest  
 
-#### Tradeoffs
+### Characteristics
+- No optional subsystems  
+- No asynchronous side-effect writes  
+- No heuristic fallbacks  
+- Fully explicit execution model  
 
-* Not strictly deterministic across nodes
-* Merge behavior depends on timing
-* Some internal heuristics are adaptive
-
-#### Use Cases
-
-* Real-time systems
-* Edge deployments
-* High-throughput ingestion pipelines
-* Systems where availability > strict consistency
-
----
-
-## Manifold Extensions
-
-DUME supports distributed manifold learning via:
-
-### Graph Evolution
-
-* Incremental structure learning
-* k-nearest connectivity
-* Local topology refinement
-
-### Gossip Coordination
-
-* Cluster-wide delta propagation
-* CRDT-like merge semantics
-
-### Drift Monitoring
-
-* Detects instability in vector space
-* Enables adaptive renormalization
-
-### Renormalization
-
-* Stabilizes vectors under high drift conditions
+### Use Cases
+- Distributed consistency systems  
+- Audit and compliance pipelines  
+- Scientific ML workflows  
+- Deterministic debugging environments  
 
 ---
 
-## Storage Model
+## 2. DUME Hybrid Engine
 
-### Deterministic Envelope
+The Hybrid Engine prioritizes performance and adaptability.
 
-All ingested data is wrapped in a canonical structure:
+### Features
+- Optional subsystems (speculation, burst control, evolution)  
+- Approximate nearest neighbor indexing  
+- Tiered storage (hot/cold)  
+- Gossip-based eventual consistency  
+- Graceful degradation under subsystem failure  
 
-* Anchor (compressed vector)
-* Metadata (entropy, drift, phase)
-* Version + timestamp
-* Checksum
+### Tradeoffs
+- Not strictly deterministic across nodes  
+- Timing-dependent merge behavior  
+- Heuristic-driven optimizations  
 
-This ensures:
-
-* Replayability
-* Integrity
-* Forward compatibility
-
----
-
-## Compression Strategy
-
-* Sparse encoding based on:
-
-  * Entropy
-  * Drift
-  * Burst conditions
-* Designed to:
-
-  * Minimize storage footprint
-  * Preserve reconstructability
-  * Avoid expensive decode paths
+### Use Cases
+- Real-time ingestion systems  
+- Edge deployments  
+- High-throughput vector pipelines  
+- Availability-first architectures  
 
 ---
 
-## Retrieval Path
+# DUMEgov — Governance & Verification Layer
 
-Retrieval is intentionally simple:
+DUMEgov is a **non-intrusive verification layer** that runs alongside either engine.
 
-1. Load envelope from storage
-2. Return cached dense vector (if available)
-3. Otherwise decompress
+It does not modify execution. It observes, validates, and enforces system integrity.
+
+---
+
+## Purpose
+
+DUMEgov ensures:
+
+- State transitions are verifiable after execution  
+- Ingestion follows policy constraints  
+- Tampering or corruption is detectable  
+- System state is replayable and auditable  
+
+---
+
+## Architecture Position
+    ┌──────────────────────┐
+    │   DUME Engine        │
+    │ (Strict / Hybrid)    │
+    └──────────┬───────────┘
+               │
+    ┌──────────▼───────────┐
+    │     DUMEgov Layer     │
+    │  - Policy Enforcement │
+    │  - Audit Logging      │
+    │  - Integrity Checks   │
+    └──────────┬───────────┘
+               │
+    ┌──────────▼───────────┐
+    │ Append-Only Audit Log │
+    │ (Merkle + Signatures) │
+    └───────────────────────┘
+
+---
+
+## Capabilities
+
+### 1. Cryptographic Integrity
+- SHA-256 hashing of all envelopes  
+- Zoned signature binding (ingest / compute / audit)  
+- Chain-linked records  
+
+Result: tamper-evident system history  
+
+---
+
+### 2. Append-Only Audit Log
+- Immutable event history  
+- No modification or deletion  
+- Strict sequential ordering  
+
+Each record includes:
+- Envelope hash  
+- Previous hash link  
+- Merkle root snapshot  
+- Signature  
+- Policy version  
+- Actor identity  
+
+---
+
+### 3. Merkle Checkpointing
+- Periodic system-wide state roots  
+- Efficient batch verification  
+- Fast rollback validation  
+
+---
+
+### 4. Policy Enforcement
+Hard constraints enforced before audit:
+
+- Drift thresholds  
+- Entropy limits  
+- Burst restrictions (optional)  
+
+Violations result in immediate rejection.
+
+---
+
+### 5. Replay Validation
+Supports full system reconstruction:
+
+- Rebuild ingest pipeline  
+- Recompute envelopes  
+- Validate hash chains  
+- Verify Merkle consistency  
+
+---
+
+# Distributed Model Comparison
+
+| Feature            | Hybrid Engine | Strict Engine | DUMEgov |
+|--------------------|--------------|--------------|---------|
+| Determinism        | Partial      | Full         | Full    |
+| Replayability      | No           | Yes          | Yes     |
+| Adaptivity         | High         | Low          | None    |
+| Auditability       | No           | Partial      | Full    |
+| Tamper Detection   | No           | No           | Yes     |
+| Policy Enforcement | No           | No           | Yes     |
+
+---
+
+# Data Model
+
+## Deterministic Envelope
+
+All system state is normalized into:
+
+- Compressed vector anchor  
+- Metadata (entropy, drift, phase)  
+- Versioned timestamp  
+- Integrity checksum  
+
+This is the atomic unit of truth.
+
+---
+
+# Compression Strategy
+
+Sparse encoding driven by:
+- entropy  
+- drift  
+- burst conditions  
+
+Goals:
+- minimize storage footprint  
+- preserve reconstructability  
+- avoid expensive decode paths  
+
+---
+
+# Retrieval Path
+
+1. Load envelope from storage  
+2. Return cached dense vector (if available)  
+3. Otherwise decompress  
 
 No speculation or graph logic is applied during retrieval.
 
 ---
 
-## Distributed Operation
+# Example Usage
 
-| Feature           | Hybrid Engine    | Strict Engine      |
-| ----------------- | ---------------- | ------------------ |
-| Consistency Model | Eventual         | Deterministic      |
-| Merge Strategy    | Heuristic / CRDT | Total ordered CRDT |
-| Replayable        | No               | Yes                |
-| Clock             | System time      | Monotonic counter  |
-| Sync Mechanism    | Gossip           | Ordered log replay |
-
----
-
-## Example Usage
-
-### Hybrid Engine
-
+## Hybrid Engine
 ```swift
+
+Strict Engine:
+
 let engine = DUMEHybridEngine(
     metric: metric,
     storage: storage,
@@ -210,13 +260,6 @@ try await engine.ingest(
     vector: embedding,
     ctx: context
 )
-```
-
----
-
-### Strict Engine
-
-```swift
 let engine = DUMEStrictEngine(
     metric: metric,
     storage: storage
@@ -229,366 +272,332 @@ try await engine.ingest(
 )
 
 await engine.reconcile()
-```
 
----
-
-## When to Use Which
-
-Use **Strict Engine** if:
-
-* You need reproducibility
-* You run multi-node systems
-* You care about deterministic debugging
-
-Use **Hybrid Engine** if:
-
-* You need speed and flexibility
-* You operate under variable load
-* You prioritize uptime over exact consistency
-
----
-
-## Design Tradeoffs
-
-| Area        | Hybrid                      | Strict                      |
-| ----------- | --------------------------- | --------------------------- |
-| Flexibility | High                        | Low                         |
-| Determinism | Partial                     | Full                        |
-| Performance | Higher (adaptive)           | Slightly lower (controlled) |
-| Complexity  | Lower surface, hidden logic | Explicit, predictable       |
-
----
-
-## Extensibility
-
-You can extend DUME with:
-
-* Custom distance metrics
-* Alternative compression strategies
-* Different storage backends
-* GPU-accelerated indexing
-* Advanced manifold projection (e.g., Laplacian methods)
-
----
-
-## Future Work
-
-* Deterministic ANN structures
-* Formal verification of merge logic
-* SIMD / GPU acceleration
-* Streaming ingestion pipelines
-* Adaptive manifold curvature modeling
-
----
-
-## License
-
-TBD
-
----
-
-## Final Notes
-
-DUME is not just a vector store—it is a **controlled evolution system for high-dimensional data**.
-
-The strict and hybrid engines are intentionally different:
-
-* One guarantees correctness
-* The other maximizes survivability
-
-# DUMEgov Addendum
-
-This document extends the core DUME README to cover the **DUMEgov layer**, which introduces **auditability, policy enforcement, and tamper-evident guarantees** on top of the strict execution model.
-
-DUMEgov is not a separate engine—it is a **compliance wrapper around `DUMEStrictEngine`** that enforces operational constraints required in regulated or high-assurance environments.
-
----
-
-## Purpose
-
-DUMEgov exists to answer questions that the base engines do not fully address:
-
-* Can every state transition be **verified after the fact**?
-* Can data ingestion be **restricted by policy**?
-* Can the system detect **tampering or corruption**?
-* Can a dataset be **replayed and validated deterministically**?
-
-The strict engine provides determinism.
-DUMEgov adds **trust guarantees** on top of it.
-
----
-
-## Architectural Position
-
-```id="govarch01"
-        ┌──────────────────────┐
-        │   DUMEStrictEngine   │
-        │ (Deterministic Core) │
-        └──────────┬───────────┘
-                   ↓
-        ┌──────────────────────┐
-        │     DUMEgov Layer     │
-        │  - Policy Enforcement │
-        │  - Audit Logging      │
-        │  - Integrity Checks   │
-        └──────────┬───────────┘
-                   ↓
-        ┌──────────────────────┐
-        │  Append-Only Log     │
-        │ (Tamper Evident)     │
-        └──────────────────────┘
-```
-
----
-
-## Key Capabilities
-
-### 1. Cryptographic Integrity
-
-Each ingested envelope is:
-
-* Serialized
-* Hashed (SHA-256)
-* Linked to the previous record
-* Signed
-
-This creates a **chain of trust** across all ingested data.
-
-#### Outcome
-
-* Detects tampering
-* Detects deletion or reordering
-* Enables full integrity verification
-
----
-
-### 2. Append-Only Audit Log
-
-DUMEgov introduces an **immutable audit log**:
-
-* No updates
-* No deletions
-* Only sequential appends
-
-Each record contains:
-
-* Envelope hash
-* Previous hash
-* Signature
-* Version + timestamp
-
-#### Outcome
-
-* Full ingestion history
-* Traceable system evolution
-* Forensic reconstruction capability
-
----
-
-### 3. Policy Enforcement
-
-Unlike the hybrid engine (adaptive behavior), DUMEgov enforces **hard constraints**:
-
-* Maximum drift threshold
-* Maximum entropy threshold
-* Optional burst rejection
-
-Violations result in **immediate ingest failure**.
-
-#### Outcome
-
-* Prevents unstable or unsafe data from entering the system
-* Converts soft signals into enforceable rules
-
----
-
-### 4. Deterministic Replay Validation
-
-DUMEgov supports replaying a dataset and verifying that:
-
-* The same envelopes produce
-* The same audit chain
-* With identical hashes
-
-#### Outcome
-
-* Reproducibility guarantees
-* Verifiable data pipelines
-* Deterministic debugging
-
----
-
-### 5. Integrity Verification
-
-The system can validate the entire audit chain:
-
-```swift id="govverify01"
-let isValid = await govEngine.verifyIntegrity()
-```
-
-This checks:
-
-* Signature correctness
-* Hash chain continuity
-
----
-
-## Example Usage
-
-### Initialization
-
-```swift id="govexample01"
-let strict = DUMEStrictEngine(
-    metric: metric,
-    storage: storage
-)
+DUMEgov Layer:
 
 let gov = DUMEGovEngine(
-    engine: strict
+    engine: strictEngine,
+    policy: policy,
+    actorID: "system-node-1"
 )
-```
 
----
-
-### Compliant Ingest
-
-```swift id="govexample02"
 try await gov.ingest(
     id: "vec-1",
     vector: embedding,
     ctx: context
 )
-```
+When to Use Each
+Strict Engine
+Deterministic behavior required
+Multi-node reproducibility required
+Debugging correctness critical
+Hybrid Engine
+Throughput is priority
+System conditions are dynamic
+Availability > strict consistency
+DUMEgov
+Auditability required
+Compliance or verification required
+System integrity must be provable
+Design Philosophy
 
----
+DUME separates system truth into three layers:
 
-### Audit Export
+Computation truth → Engines
+Storage truth → Envelopes
+Verification truth → DUMEgov
 
-```swift id="govexample03"
-let log = await gov.exportAuditLog()
-```
+No single layer is fully trusted alone.
 
----
+Extensibility
+Custom distance metrics
+Alternative compression strategies
+Pluggable storage backends
+GPU acceleration
+Advanced manifold projection models
+Future Work
+Deterministic ANN indexing structures
+Formal verification of ingest pipelines
+Secure enclave / HSM signing integration
+Streaming ingestion architecture
+Distributed consensus audit anchoring
 
-### Replay Validation
+License: TBD
 
-```swift id="govexample04"
-let isValid = try await gov.replayValidate(envelopes)
-```
+Note: DUME is not a vector database. 
 
----
+// MARK: - DUME at Scale: Distributed Implementation Strategy
 
-## Comparison with Base Engines
+/*
+ At scale, DUME should NOT be deployed as a monolithic system.
+ Instead, it should be decomposed into four independently scalable planes:
 
-| Capability          | Hybrid Engine | Strict Engine | DUMEgov |
-| ------------------- | ------------- | ------------- | ------- |
-| Determinism         | Partial       | Full          | Full    |
-| Adaptive Behavior   | Yes           | Limited       | No      |
-| Audit Trail         | No            | Partial       | Full    |
-| Tamper Detection    | No            | No            | Yes     |
-| Policy Enforcement  | No            | No            | Yes     |
-| Replay Verification | No            | Partial       | Yes     |
+ 1. Compute Plane (Engines)
+ 2. Transport Plane (Event Streaming)
+ 3. Storage Plane (Tiered Envelope Persistence)
+ 4. Verification Plane (DUMEgov)
 
----
+ Each plane scales independently and is connected only through immutable
+ deterministic envelopes and append-only event logs.
+*/
 
-## Design Constraints
+// =====================================================
+// MARK: - 1. COMPUTE PLANE (ENGINE CLUSTER)
+// =====================================================
 
-DUMEgov intentionally restricts behavior:
+/*
+ The Strict and Hybrid engines should run as stateless or minimally stateful
+ compute nodes behind a partitioning layer.
 
-* No silent degradation
-* No optional enforcement
-* No non-deterministic side effects
+ Key properties:
+ - Horizontal scaling (N engine nodes)
+ - Stateless ingest processing (preferred)
+ - Deterministic envelope emission
+ - No reliance on shared mutable state
+*/
 
-All operations must be:
+actor DUMEEngineNode {
 
-* Explicit
-* Verifiable
-* Reproducible
+    let engine: any DUMEEngine
 
----
+    init(engine: any DUMEEngine) {
+        self.engine = engine
+    }
 
-## Operational Considerations
+    func ingest(
+        id: String,
+        vector: [Float],
+        ctx: CompressionContext
+    ) async throws -> DeterministicEnvelope {
 
-### Performance Impact
+        try await engine.ingest(id: id, vector: vector, ctx: ctx)
 
-* Additional hashing and signing overhead
-* Audit log growth over time
-* Slightly increased ingest latency
+        guard let envelope = try await engine.retrieveEnvelope(id: id) else {
+            throw DUMEError.invalidVector("Missing envelope after ingest")
+        }
 
-### Storage Impact
+        return envelope
+    }
+}
 
-* Audit records stored alongside data
-* Linear growth with ingest volume
+// =====================================================
+// MARK: - 2. SHARDING LAYER (DETERMINISTIC PARTITIONING)
+// =====================================================
 
----
+/*
+ All ingestion must be partitioned deterministically to preserve ordering.
 
-## Security Notes
+ Rule:
+ - Same ID → same shard → same processing order
 
-Current implementation includes:
+ This ensures replay consistency in Strict mode and stable evolution in Hybrid mode.
+*/
 
-* SHA-256 hashing
-* Logical signing abstraction
+struct DUMEPartitioner {
 
-Not included (but expected in hardened deployments):
+    let shardCount: Int
 
-* Hardware-backed key management (HSM / Secure Enclave)
-* Certified cryptographic modules
-* Secure key rotation
-* Identity and access control
-* Encrypted transport (TLS/mTLS)
+    func shard(for id: String) -> Int {
+        abs(id.hashValue) % shardCount
+    }
+}
 
----
+// =====================================================
+// MARK: - 3. TRANSPORT LAYER (EVENT STREAM)
+// =====================================================
 
-## When to Use DUMEgov
+/*
+ All computed results are emitted as immutable events.
 
-Use this layer when:
+ Recommended implementation:
+ - Kafka / NATS / custom append-only log
+ - Partitioned by shard key
+ - Strict ordering per partition
+*/
 
-* Data integrity must be provable
-* System behavior must be auditable
-* Ingestion must be policy-controlled
-* Outputs must be reproducible and defensible
+struct DUMEEvent: Codable, Sendable {
+    let id: String
+    let shard: Int
+    let envelope: DeterministicEnvelope
+    let timestamp: UInt64
+}
 
-Avoid using it when:
+actor DUMEEventBus {
 
-* Maximum throughput is the only priority
-* Data is ephemeral or low-risk
-* Strict guarantees are unnecessary
+    private var subscribers: [String: (DUMEEvent) async -> Void] = [:]
 
----
+    func publish(_ event: DUMEEvent) async {
+        for subscriber in subscribers.values {
+            await subscriber(event)
+        }
+    }
 
-## Design Philosophy
+    func subscribe(
+        name: String,
+        handler: @escaping (DUMEEvent) async -> Void
+    ) {
+        subscribers[name] = handler
+    }
+}
 
-DUMEgov does not attempt to make the system “smarter.”
-It makes the system **accountable**.
+// =====================================================
+// MARK: - 4. STORAGE LAYER (TIERED ENVELOPES)
+// =====================================================
 
-Where the hybrid engine adapts,
-and the strict engine guarantees,
+/*
+ Storage is split into:
 
-DUMEgov **proves**.
+ - HOT: recent, low-latency access
+ - COLD: long-term compressed archival storage
 
----
+ All writes are append-only.
+*/
 
-## Future Extensions
+final class DUMETieredStorage {
 
-Potential upgrades include:
+    private let hot: any DUMEPersistentStorage
+    private let cold: any DUMEPersistentStorage
 
-* Merkle tree–based audit structures
-* Hardware-backed signing (HSM integration)
-* Zero-trust ingestion pipelines
-* Formal verification of audit invariants
-* Policy DSL for dynamic rule definition
+    init(hot: any DUMEPersistentStorage,
+         cold: any DUMEPersistentStorage) {
+        self.hot = hot
+        self.cold = cold
+    }
 
----
+    func write(_ envelope: DeterministicEnvelope) async throws {
 
-## Final Note
+        try await hot.put(envelope)
 
-DUMEgov should be viewed as a **trust layer**, not a feature set.
+        Task.detached {
+            try? await self.cold.put(envelope)
+        }
+    }
 
-It transforms DUME from:
-> a deterministic vector system
+    func read(_ id: String) async throws -> DeterministicEnvelope? {
 
-into:
-> a verifiable system of record for vector evolution
+        if let hotHit = try await hot.get(id) {
+            return hotHit
+        }
 
-Choosing between them is a system design decision, not a configuration toggle.
+        if let coldHit = try await cold.get(id) {
+            try? await hot.put(coldHit) // promote to hot cache
+            return coldHit
+        }
+
+        return nil
+    }
+}
+
+// =====================================================
+// MARK: - 5. VERIFICATION PLANE (DUMEgov CLUSTER)
+// =====================================================
+
+/*
+ DUMEgov must NEVER sit in the execution path.
+
+ It operates as a parallel verification system consuming the same event stream.
+*/
+
+actor DUMEGovNode {
+
+    private let crypto: GovCrypto
+    private var auditLog: [AuditRecordV3] = []
+
+    init(crypto: GovCrypto) {
+        self.crypto = crypto
+    }
+
+    func consume(event: DUMEEvent) throws {
+
+        let encoded = try JSONEncoder().encode(event.envelope)
+        let hash = crypto.hash(encoded)
+
+        let record = AuditRecordV3(
+            id: event.id,
+            version: 0,
+            timestamp: event.timestamp,
+            envelopeHash: hash,
+            prevHash: auditLog.last?.envelopeHash,
+            merkleRoot: Data(), // computed in batch checkpointing
+            checkpointRoot: nil,
+            signature: try crypto.sign(hash, keyID: "gov", zone: .audit),
+            keyID: "gov",
+            zone: .audit,
+            actorID: "system",
+            policy: GovPolicyV3(
+                policyID: "default",
+                version: 1,
+                maxDrift: 0.35,
+                maxEntropy: 0.85,
+                allowBurst: true
+            )
+        )
+
+        auditLog.append(record)
+    }
+
+    func verifyIntegrity() -> Bool {
+
+        var prev: Data?
+
+        for record in auditLog {
+
+            if let p = prev, record.prevHash != p {
+                return false
+            }
+
+            prev = record.envelopeHash
+        }
+
+        return true
+    }
+}
+
+// =====================================================
+// MARK: - 6. GLOBAL SCALE DEPLOYMENT MODEL
+// =====================================================
+
+/*
+ At scale, DUME operates as a multi-plane distributed system:
+
+ Compute Layer:
+ - Many engine nodes
+ - Partitioned by deterministic hashing
+ - Stateless ingest preferred
+
+ Transport Layer:
+ - Append-only event log
+ - Ordered per shard
+ - Replayable stream
+
+ Storage Layer:
+ - Hot + cold tier separation
+ - Envelope-based persistence
+ - Immutable writes
+
+ Verification Layer (DUMEgov):
+ - Independent cluster
+ - Parallel consumption of event stream
+ - Merkle + hash chain validation
+ - No influence on compute path
+*/
+
+// =====================================================
+// MARK: - SCALE DESIGN PRINCIPLE
+// =====================================================
+
+/*
+ The key scaling rule:
+
+    No single component is allowed to define truth.
+
+ Instead:
+
+ - Engines compute possible state
+ - Storage preserves immutable history
+ - DUMEgov verifies correctness
+ - Replay reconstructs truth
+
+ Truth emerges from deterministic recomputation over logs,
+ not from runtime memory state.
+*/
