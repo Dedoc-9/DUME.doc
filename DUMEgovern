@@ -2,16 +2,17 @@ import Foundation
 import CryptoKit
 
 // =====================================================
-// MARK: - CRYPTO SUITE (FIPS-ALIGNABLE STRUCTURE)
+// MARK: - CRYPTO PRIMITIVE LAYER
 // =====================================================
 
 public protocol DUMEGovCrypto: Sendable {
     func hash(_ data: Data) -> Data
-    func sign(_ data: Data) throws -> Data
-    func verify(_ data: Data, signature: Data) -> Bool
+    func sign(_ data: Data, keyID: String) throws -> Data
+    func verify(_ data: Data, signature: Data, keyID: String) -> Bool
 }
 
-public struct SHA256Crypto: DUMEGovCrypto {
+// Production-aligned SHA256 + signing abstraction
+public struct SHA256GovCrypto: DUMEGovCrypto {
 
     public init() {}
 
@@ -19,18 +20,37 @@ public struct SHA256Crypto: DUMEGovCrypto {
         Data(SHA256.hash(data: data))
     }
 
-    public func sign(_ data: Data) throws -> Data {
-        // Placeholder: replace with HSM / Secure Enclave
-        return hash(data)
+    public func sign(_ data: Data, keyID: String) throws -> Data {
+        // Replace with HSM / Secure Enclave / external signer
+        var context = SHA256()
+        context.update(data: data)
+        context.update(data: Data(keyID.utf8))
+        return Data(context.finalize())
     }
 
-    public func verify(_ data: Data, signature: Data) -> Bool {
-        return hash(data) == signature
+    public func verify(_ data: Data, signature: Data, keyID: String) -> Bool {
+        (try? sign(data, keyID: keyID)) == signature
     }
 }
 
 // =====================================================
-// MARK: - IMMUTABLE AUDIT RECORD
+// MARK: - GOVERNANCE METADATA
+// =====================================================
+
+public struct GovIdentity: Codable, Sendable {
+    public let actorID: String
+    public let systemID: String
+}
+
+public struct GovPolicy: Codable, Sendable {
+    public let version: String
+    public let maxDrift: Float
+    public let maxEntropy: Float
+    public let allowBurst: Bool
+}
+
+// =====================================================
+// MARK: - AUDIT RECORD (IMMUTABLE)
 // =====================================================
 
 public struct AuditRecord: Codable, Sendable {
@@ -42,123 +62,171 @@ public struct AuditRecord: Codable, Sendable {
     public let envelopeHash: Data
     public let previousHash: Data?
 
+    public let merkleRoot: Data
+
     public let signature: Data
+    public let keyID: String
+
+    public let actor: GovIdentity
+    public let policy: GovPolicy
 }
 
 // =====================================================
-// MARK: - APPEND-ONLY AUDIT LOG
+// MARK: - MERKLE BUILDER (ANCHORING)
+// =====================================================
+
+public struct MerkleTree {
+
+    public static func root(_ hashes: [Data]) -> Data {
+        guard !hashes.isEmpty else { return Data() }
+
+        var level = hashes
+
+        while level.count > 1 {
+            var next: [Data] = []
+
+            for i in stride(from: 0, to: level.count, by: 2) {
+                let left = level[i]
+                let right = (i + 1 < level.count) ? level[i + 1] : left
+                next.append(hashPair(left, right))
+            }
+
+            level = next
+        }
+
+        return level.first ?? Data()
+    }
+
+    private static func hashPair(_ a: Data, _ b: Data) -> Data {
+        Data(SHA256.hash(data: a + b))
+    }
+}
+
+// =====================================================
+// MARK: - APPEND-ONLY GOVERNANCE LOG
 // =====================================================
 
 public actor AuditLog {
 
     private var records: [AuditRecord] = []
     private let crypto: DUMEGovCrypto
+    private let keyID: String
 
-    public init(crypto: DUMEGovCrypto) {
+    public init(crypto: DUMEGovCrypto, keyID: String) {
         self.crypto = crypto
+        self.keyID = keyID
     }
 
-    public func append(envelope: DeterministicEnvelope) throws {
+    public func append(
+        envelope: DeterministicEnvelope,
+        actor: GovIdentity,
+        policy: GovPolicy
+    ) throws {
 
         let encoded = try JSONEncoder().encode(envelope)
-        let hash = crypto.hash(encoded)
+        let envelopeHash = crypto.hash(encoded)
 
-        let prev = records.last?.envelopeHash
+        let previous = records.last?.envelopeHash
 
-        let chained = prev != nil ? (prev! + hash) : hash
-        let signature = try crypto.sign(chained)
+        let merkleRoot = MerkleTree.root(records.map { $0.envelopeHash } + [envelopeHash])
+
+        let payload = envelopeHash + merkleRoot
+        let signature = try crypto.sign(payload, keyID: keyID)
 
         let record = AuditRecord(
             id: envelope.anchor.id,
             version: UInt64(envelope.ingestIndex),
             timestamp: envelope.timestamp,
-            envelopeHash: hash,
-            previousHash: prev,
-            signature: signature
+            envelopeHash: envelopeHash,
+            previousHash: previous,
+            merkleRoot: merkleRoot,
+            signature: signature,
+            keyID: keyID,
+            actor: actor,
+            policy: policy
         )
 
         records.append(record)
     }
 
-    public func verifyChain() -> Bool {
+    // =====================================================
+    // MARK: - INTEGRITY CHECK
+    // =====================================================
 
-        var prev: Data?
+    public func verify() -> Bool {
+
+        var previous: Data?
 
         for record in records {
 
-            let chained = prev != nil
-                ? (prev! + record.envelopeHash)
-                : record.envelopeHash
+            let recomputedRoot = MerkleTree.root(
+                records
+                    .prefix(while: { $0.id != record.id })
+                    .map { $0.envelopeHash } + [record.envelopeHash]
+            )
 
-            if !crypto.verify(chained, signature: record.signature) {
+            let payload = record.envelopeHash + recomputedRoot
+
+            guard crypto.verify(payload, signature: record.signature, keyID: record.keyID) else {
                 return false
             }
 
-            prev = record.envelopeHash
+            if let prev = previous, record.previousHash != prev {
+                return false
+            }
+
+            previous = record.envelopeHash
         }
 
         return true
     }
 
+    // Deterministic snapshot
     public func snapshot() -> [AuditRecord] {
         records
     }
 }
 
 // =====================================================
-// MARK: - POLICY ENGINE (HARD CONSTRAINTS)
-// =====================================================
-
-public struct DUMEGovPolicy {
-
-    public let maxDrift: Float
-    public let maxEntropy: Float
-    public let allowBurst: Bool
-
-    public init(
-        maxDrift: Float = 0.5,
-        maxEntropy: Float = 1.0,
-        allowBurst: Bool = false
-    ) {
-        self.maxDrift = maxDrift
-        self.maxEntropy = maxEntropy
-        self.allowBurst = allowBurst
-    }
-
-    public func validate(ctx: CompressionContext) throws {
-
-        if ctx.drift > maxDrift {
-            throw DUMEError.invalidVector("Drift exceeds policy")
-        }
-
-        if ctx.entropy > maxEntropy {
-            throw DUMEError.invalidVector("Entropy exceeds policy")
-        }
-    }
-}
-
-// =====================================================
-// MARK: - GOVERNMENT ENGINE WRAPPER
+// MARK: - GOVERNANCE ENGINE WRAPPER
 // =====================================================
 
 public final class DUMEGovEngine {
 
     private let engine: DUMEStrictEngine
     private let audit: AuditLog
-    private let policy: DUMEGovPolicy
+    private let policy: GovPolicy
+    private let actor: GovIdentity
 
     public init(
         engine: DUMEStrictEngine,
-        crypto: DUMEGovCrypto = SHA256Crypto(),
-        policy: DUMEGovPolicy = .init()
+        crypto: DUMEGovCrypto = SHA256GovCrypto(),
+        keyID: String,
+        policy: GovPolicy,
+        actor: GovIdentity
     ) {
         self.engine = engine
-        self.audit = AuditLog(crypto: crypto)
+        self.audit = AuditLog(crypto: crypto, keyID: keyID)
         self.policy = policy
+        self.actor = actor
     }
 
     // =====================================================
-    // MARK: - COMPLIANT INGEST
+    // MARK: - POLICY ENFORCEMENT
+    // =====================================================
+
+    private func validate(_ ctx: CompressionContext) throws {
+        if ctx.drift > policy.maxDrift {
+            throw DUMEError.invalidVector("Drift exceeded")
+        }
+
+        if ctx.entropy > policy.maxEntropy {
+            throw DUMEError.invalidVector("Entropy exceeded")
+        }
+    }
+
+    // =====================================================
+    // MARK: - GOVERNED INGEST
     // =====================================================
 
     public func ingest(
@@ -167,59 +235,30 @@ public final class DUMEGovEngine {
         ctx: CompressionContext
     ) async throws {
 
-        // 1. Enforce policy BEFORE mutation
-        try policy.validate(ctx: ctx)
+        try validate(ctx)
 
-        // 2. Perform deterministic ingest
         try await engine.ingest(id: id, vector: vector, ctx: ctx)
 
-        // 3. Retrieve envelope (source of truth)
         guard let envelope = try await engine.retrieveEnvelope(id: id) else {
-            throw DUMEError.invalidVector("Missing envelope after ingest")
+            throw DUMEError.invalidVector("Missing envelope")
         }
 
-        // 4. Append to tamper-proof audit log
-        try await audit.append(envelope: envelope)
+        try audit.append(
+            envelope: envelope,
+            actor: actor,
+            policy: policy
+        )
     }
 
     // =====================================================
-    // MARK: - AUDIT + VERIFICATION
+    // MARK: - INTEGRITY & AUDIT
     // =====================================================
 
     public func verifyIntegrity() async -> Bool {
-        await audit.verifyChain()
+        await audit.verify()
     }
 
-    public func exportAuditLog() async -> [AuditRecord] {
+    public func exportAudit() async -> [AuditRecord] {
         await audit.snapshot()
-    }
-
-    // =====================================================
-    // MARK: - REPLAY VALIDATION
-    // =====================================================
-
-    public func replayValidate(
-        envelopes: [DeterministicEnvelope]
-    ) async throws -> Bool {
-
-        let tempLog = AuditLog(crypto: SHA256Crypto())
-
-        for env in envelopes {
-            try await tempLog.append(envelope: env)
-        }
-
-        return await tempLog.verifyChain()
-    }
-}
-
-// =====================================================
-// MARK: - STRICT ENGINE EXTENSION (REQUIRED HOOK)
-// =====================================================
-
-extension DUMEStrictEngine {
-
-    // Required for audit layer
-    public func retrieveEnvelope(id: String) async throws -> DeterministicEnvelope? {
-        try await storage.get(id)
     }
 }
