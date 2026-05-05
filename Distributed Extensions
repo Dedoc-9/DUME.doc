@@ -1,0 +1,284 @@
+import Foundation
+
+// MARK: - GLOBAL MANIFOLD EXTENSIONS
+// Drop-in additions to DUMEHybridEngine ecosystem
+
+// =====================================================
+// MARK: - CLUSTER EVENT (CRDT-LIKE DELTA)
+// =====================================================
+
+public struct GraphDelta: Codable, Sendable {
+    public let nodeID: String
+    public let vector: [Float]
+    public let version: Int
+    public let timestamp: UInt64
+}
+
+// Deterministic merge rule (last-write-wins + distance guard)
+public struct GraphMergePolicy {
+
+    public static func merge(
+        local: [String: GraphDelta],
+        incoming: [GraphDelta],
+        metric: DUMEMetric
+    ) -> [String: GraphDelta] {
+
+        var result = local
+
+        for delta in incoming {
+            if let existing = result[delta.nodeID] {
+
+                // Deterministic resolution
+                if delta.version > existing.version {
+                    result[delta.nodeID] = delta
+                } else if delta.version == existing.version {
+                    // tie-break via distance stability
+                    let dOld = metric.distance(existing.vector, delta.vector)
+                    if dOld > 0.001 {
+                        result[delta.nodeID] = delta
+                    }
+                }
+
+            } else {
+                result[delta.nodeID] = delta
+            }
+        }
+
+        return result
+    }
+}
+
+// =====================================================
+// MARK: - GOSSIP PROTOCOL (EVENTUAL CONSISTENCY)
+// =====================================================
+
+public actor GossipCoordinator {
+
+    private var peers: [String] = []
+    private var localState: [String: GraphDelta] = [:]
+
+    public init() {}
+
+    public func registerPeer(_ peer: String) {
+        peers.append(peer)
+    }
+
+    public func updateLocal(delta: GraphDelta) {
+        localState[delta.nodeID] = delta
+    }
+
+    // Simulated broadcast (plug real transport: gRPC/WebSocket)
+    public func gossip() async -> [GraphDelta] {
+        return Array(localState.values)
+    }
+
+    public func merge(
+        incoming: [GraphDelta],
+        metric: DUMEMetric
+    ) {
+        localState = GraphMergePolicy.merge(
+            local: localState,
+            incoming: incoming,
+            metric: metric
+        )
+    }
+
+    public func snapshot() -> [GraphDelta] {
+        Array(localState.values)
+    }
+}
+
+// =====================================================
+// MARK: - DRIFT MONITOR (CLUSTER-WIDE SAFETY)
+// =====================================================
+
+public final class DriftMonitor {
+
+    private var rollingDrift: [Float] = []
+    private let windowSize = 50
+
+    public init() {}
+
+    public func record(_ drift: Float) {
+        rollingDrift.append(drift)
+        if rollingDrift.count > windowSize {
+            rollingDrift.removeFirst()
+        }
+    }
+
+    public var averageDrift: Float {
+        guard !rollingDrift.isEmpty else { return 0 }
+        return rollingDrift.reduce(0, +) / Float(rollingDrift.count)
+    }
+
+    public var isUnstable: Bool {
+        averageDrift > 0.35 // tunable threshold
+    }
+}
+
+// =====================================================
+// MARK: - ADAPTIVE RENORMALIZATION
+// =====================================================
+
+public struct Renormalizer {
+
+    public static func apply(
+        to vector: [Float],
+        severity: Float
+    ) -> [Float] {
+
+        let scale = max(0.5, 1.0 - severity)
+
+        return vector.map { $0 * scale }
+    }
+}
+
+// =====================================================
+// MARK: - TIERED STORAGE (HOT + COLD)
+// =====================================================
+
+public final class TieredStorage: DUMEPersistentStorage {
+
+    private let hot: any DUMEPersistentStorage
+    private let cold: any DUMEPersistentStorage
+
+    public init(
+        hot: any DUMEPersistentStorage,
+        cold: any DUMEPersistentStorage
+    ) {
+        self.hot = hot
+        self.cold = cold
+    }
+
+    public func put(_ envelope: DeterministicEnvelope) async throws {
+
+        // Write to hot immediately
+        try await hot.put(envelope)
+
+        // Async offload to cold
+        Task.detached {
+            try? await self.cold.put(envelope)
+        }
+    }
+
+    public func get(_ id: String) async throws -> DeterministicEnvelope? {
+
+        if let hotHit = try await hot.get(id) {
+            return hotHit
+        }
+
+        // Lazy load from cold
+        if let coldHit = try await cold.get(id) {
+
+            // promote back to hot cache
+            try? await hot.put(coldHit)
+            return coldHit
+        }
+
+        return nil
+    }
+
+    public func checkpoint() async throws {
+        try await hot.checkpoint()
+        try await cold.checkpoint()
+    }
+
+    public func restore() async throws {
+        try await hot.restore()
+        try await cold.restore()
+    }
+}
+
+// =====================================================
+// MARK: - GLOBAL-AWARE ENGINE EXTENSION
+// =====================================================
+
+extension DUMEHybridEngine {
+
+    // Inject these optionally
+    public func attachCluster(
+        gossip: GossipCoordinator,
+        driftMonitor: DriftMonitor
+    ) {
+        self._gossip = gossip
+        self._driftMonitor = driftMonitor
+    }
+
+    // Associated objects workaround (since extension)
+    private struct Keys {
+        static var gossip = "dume.gossip"
+        static var drift = "dume.drift"
+    }
+
+    private var _gossip: GossipCoordinator? {
+        get { objc_getAssociatedObject(self, &Keys.gossip) as? GossipCoordinator }
+        set { objc_setAssociatedObject(self, &Keys.gossip, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    private var _driftMonitor: DriftMonitor? {
+        get { objc_getAssociatedObject(self, &Keys.drift) as? DriftMonitor }
+        set { objc_setAssociatedObject(self, &Keys.drift, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    // =====================================================
+    // MARK: - AUGMENTED INGEST (GLOBAL SAFE)
+    // =====================================================
+
+    public func ingestDistributed(
+        id: String,
+        vector: [Float],
+        ctx: CompressionContext
+    ) async throws {
+
+        // 1. Drift monitoring
+        _driftMonitor?.record(ctx.drift)
+
+        var adjustedVector = vector
+
+        // 2. Renormalization if unstable cluster
+        if let monitor = _driftMonitor, monitor.isUnstable {
+            adjustedVector = Renormalizer.apply(
+                to: vector,
+                severity: monitor.averageDrift
+            )
+        }
+
+        // 3. Run standard ingest
+        try await ingest(id: id, vector: adjustedVector, ctx: ctx)
+
+        // 4. Emit graph delta (non-blocking)
+        if let gossip = _gossip {
+
+            let delta = GraphDelta(
+                nodeID: id,
+                vector: adjustedVector,
+                version: ingestCount,
+                timestamp: clock.now()
+            )
+
+            await gossip.updateLocal(delta: delta)
+        }
+    }
+
+    // =====================================================
+    // MARK: - BACKGROUND GLOBAL MERGE
+    // =====================================================
+
+    public func reconcileGlobalState() async {
+
+        guard let gossip = _gossip else { return }
+
+        let incoming = await gossip.gossip()
+
+        await gossip.merge(incoming: incoming, metric: metric)
+
+        // Apply merged graph into local evolution layer
+        if let graph = graph {
+            let snapshot = await gossip.snapshot()
+
+            for delta in snapshot {
+                graph.update(id: delta.nodeID, vector: delta.vector)
+            }
+        }
+    }
+}
