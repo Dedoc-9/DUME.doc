@@ -1,0 +1,225 @@
+import Foundation
+import CryptoKit
+
+// =====================================================
+// MARK: - CRYPTO SUITE (FIPS-ALIGNABLE STRUCTURE)
+// =====================================================
+
+public protocol DUMEGovCrypto: Sendable {
+    func hash(_ data: Data) -> Data
+    func sign(_ data: Data) throws -> Data
+    func verify(_ data: Data, signature: Data) -> Bool
+}
+
+public struct SHA256Crypto: DUMEGovCrypto {
+
+    public init() {}
+
+    public func hash(_ data: Data) -> Data {
+        Data(SHA256.hash(data: data))
+    }
+
+    public func sign(_ data: Data) throws -> Data {
+        // Placeholder: replace with HSM / Secure Enclave
+        return hash(data)
+    }
+
+    public func verify(_ data: Data, signature: Data) -> Bool {
+        return hash(data) == signature
+    }
+}
+
+// =====================================================
+// MARK: - IMMUTABLE AUDIT RECORD
+// =====================================================
+
+public struct AuditRecord: Codable, Sendable {
+
+    public let id: String
+    public let version: UInt64
+    public let timestamp: UInt64
+
+    public let envelopeHash: Data
+    public let previousHash: Data?
+
+    public let signature: Data
+}
+
+// =====================================================
+// MARK: - APPEND-ONLY AUDIT LOG
+// =====================================================
+
+public actor AuditLog {
+
+    private var records: [AuditRecord] = []
+    private let crypto: DUMEGovCrypto
+
+    public init(crypto: DUMEGovCrypto) {
+        self.crypto = crypto
+    }
+
+    public func append(envelope: DeterministicEnvelope) throws {
+
+        let encoded = try JSONEncoder().encode(envelope)
+        let hash = crypto.hash(encoded)
+
+        let prev = records.last?.envelopeHash
+
+        let chained = prev != nil ? (prev! + hash) : hash
+        let signature = try crypto.sign(chained)
+
+        let record = AuditRecord(
+            id: envelope.anchor.id,
+            version: UInt64(envelope.ingestIndex),
+            timestamp: envelope.timestamp,
+            envelopeHash: hash,
+            previousHash: prev,
+            signature: signature
+        )
+
+        records.append(record)
+    }
+
+    public func verifyChain() -> Bool {
+
+        var prev: Data?
+
+        for record in records {
+
+            let chained = prev != nil
+                ? (prev! + record.envelopeHash)
+                : record.envelopeHash
+
+            if !crypto.verify(chained, signature: record.signature) {
+                return false
+            }
+
+            prev = record.envelopeHash
+        }
+
+        return true
+    }
+
+    public func snapshot() -> [AuditRecord] {
+        records
+    }
+}
+
+// =====================================================
+// MARK: - POLICY ENGINE (HARD CONSTRAINTS)
+// =====================================================
+
+public struct DUMEGovPolicy {
+
+    public let maxDrift: Float
+    public let maxEntropy: Float
+    public let allowBurst: Bool
+
+    public init(
+        maxDrift: Float = 0.5,
+        maxEntropy: Float = 1.0,
+        allowBurst: Bool = false
+    ) {
+        self.maxDrift = maxDrift
+        self.maxEntropy = maxEntropy
+        self.allowBurst = allowBurst
+    }
+
+    public func validate(ctx: CompressionContext) throws {
+
+        if ctx.drift > maxDrift {
+            throw DUMEError.invalidVector("Drift exceeds policy")
+        }
+
+        if ctx.entropy > maxEntropy {
+            throw DUMEError.invalidVector("Entropy exceeds policy")
+        }
+    }
+}
+
+// =====================================================
+// MARK: - GOVERNMENT ENGINE WRAPPER
+// =====================================================
+
+public final class DUMEGovEngine {
+
+    private let engine: DUMEStrictEngine
+    private let audit: AuditLog
+    private let policy: DUMEGovPolicy
+
+    public init(
+        engine: DUMEStrictEngine,
+        crypto: DUMEGovCrypto = SHA256Crypto(),
+        policy: DUMEGovPolicy = .init()
+    ) {
+        self.engine = engine
+        self.audit = AuditLog(crypto: crypto)
+        self.policy = policy
+    }
+
+    // =====================================================
+    // MARK: - COMPLIANT INGEST
+    // =====================================================
+
+    public func ingest(
+        id: String,
+        vector: [Float],
+        ctx: CompressionContext
+    ) async throws {
+
+        // 1. Enforce policy BEFORE mutation
+        try policy.validate(ctx: ctx)
+
+        // 2. Perform deterministic ingest
+        try await engine.ingest(id: id, vector: vector, ctx: ctx)
+
+        // 3. Retrieve envelope (source of truth)
+        guard let envelope = try await engine.retrieveEnvelope(id: id) else {
+            throw DUMEError.invalidVector("Missing envelope after ingest")
+        }
+
+        // 4. Append to tamper-proof audit log
+        try await audit.append(envelope: envelope)
+    }
+
+    // =====================================================
+    // MARK: - AUDIT + VERIFICATION
+    // =====================================================
+
+    public func verifyIntegrity() async -> Bool {
+        await audit.verifyChain()
+    }
+
+    public func exportAuditLog() async -> [AuditRecord] {
+        await audit.snapshot()
+    }
+
+    // =====================================================
+    // MARK: - REPLAY VALIDATION
+    // =====================================================
+
+    public func replayValidate(
+        envelopes: [DeterministicEnvelope]
+    ) async throws -> Bool {
+
+        let tempLog = AuditLog(crypto: SHA256Crypto())
+
+        for env in envelopes {
+            try await tempLog.append(envelope: env)
+        }
+
+        return await tempLog.verifyChain()
+    }
+}
+
+// =====================================================
+// MARK: - STRICT ENGINE EXTENSION (REQUIRED HOOK)
+// =====================================================
+
+extension DUMEStrictEngine {
+
+    // Required for audit layer
+    public func retrieveEnvelope(id: String) async throws -> DeterministicEnvelope? {
+        try await storage.get(id)
+    }
+}
