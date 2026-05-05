@@ -297,4 +297,298 @@ The strict and hybrid engines are intentionally different:
 * One guarantees correctness
 * The other maximizes survivability
 
+# DUMEgov Addendum
+
+This document extends the core DUME README to cover the **DUMEgov layer**, which introduces **auditability, policy enforcement, and tamper-evident guarantees** on top of the strict execution model.
+
+DUMEgov is not a separate engine—it is a **compliance wrapper around `DUMEStrictEngine`** that enforces operational constraints required in regulated or high-assurance environments.
+
+---
+
+## Purpose
+
+DUMEgov exists to answer questions that the base engines do not fully address:
+
+* Can every state transition be **verified after the fact**?
+* Can data ingestion be **restricted by policy**?
+* Can the system detect **tampering or corruption**?
+* Can a dataset be **replayed and validated deterministically**?
+
+The strict engine provides determinism.
+DUMEgov adds **trust guarantees** on top of it.
+
+---
+
+## Architectural Position
+
+```id="govarch01"
+        ┌──────────────────────┐
+        │   DUMEStrictEngine   │
+        │ (Deterministic Core) │
+        └──────────┬───────────┘
+                   ↓
+        ┌──────────────────────┐
+        │     DUMEgov Layer     │
+        │  - Policy Enforcement │
+        │  - Audit Logging      │
+        │  - Integrity Checks   │
+        └──────────┬───────────┘
+                   ↓
+        ┌──────────────────────┐
+        │  Append-Only Log     │
+        │ (Tamper Evident)     │
+        └──────────────────────┘
+```
+
+---
+
+## Key Capabilities
+
+### 1. Cryptographic Integrity
+
+Each ingested envelope is:
+
+* Serialized
+* Hashed (SHA-256)
+* Linked to the previous record
+* Signed
+
+This creates a **chain of trust** across all ingested data.
+
+#### Outcome
+
+* Detects tampering
+* Detects deletion or reordering
+* Enables full integrity verification
+
+---
+
+### 2. Append-Only Audit Log
+
+DUMEgov introduces an **immutable audit log**:
+
+* No updates
+* No deletions
+* Only sequential appends
+
+Each record contains:
+
+* Envelope hash
+* Previous hash
+* Signature
+* Version + timestamp
+
+#### Outcome
+
+* Full ingestion history
+* Traceable system evolution
+* Forensic reconstruction capability
+
+---
+
+### 3. Policy Enforcement
+
+Unlike the hybrid engine (adaptive behavior), DUMEgov enforces **hard constraints**:
+
+* Maximum drift threshold
+* Maximum entropy threshold
+* Optional burst rejection
+
+Violations result in **immediate ingest failure**.
+
+#### Outcome
+
+* Prevents unstable or unsafe data from entering the system
+* Converts soft signals into enforceable rules
+
+---
+
+### 4. Deterministic Replay Validation
+
+DUMEgov supports replaying a dataset and verifying that:
+
+* The same envelopes produce
+* The same audit chain
+* With identical hashes
+
+#### Outcome
+
+* Reproducibility guarantees
+* Verifiable data pipelines
+* Deterministic debugging
+
+---
+
+### 5. Integrity Verification
+
+The system can validate the entire audit chain:
+
+```swift id="govverify01"
+let isValid = await govEngine.verifyIntegrity()
+```
+
+This checks:
+
+* Signature correctness
+* Hash chain continuity
+
+---
+
+## Example Usage
+
+### Initialization
+
+```swift id="govexample01"
+let strict = DUMEStrictEngine(
+    metric: metric,
+    storage: storage
+)
+
+let gov = DUMEGovEngine(
+    engine: strict
+)
+```
+
+---
+
+### Compliant Ingest
+
+```swift id="govexample02"
+try await gov.ingest(
+    id: "vec-1",
+    vector: embedding,
+    ctx: context
+)
+```
+
+---
+
+### Audit Export
+
+```swift id="govexample03"
+let log = await gov.exportAuditLog()
+```
+
+---
+
+### Replay Validation
+
+```swift id="govexample04"
+let isValid = try await gov.replayValidate(envelopes)
+```
+
+---
+
+## Comparison with Base Engines
+
+| Capability          | Hybrid Engine | Strict Engine | DUMEgov |
+| ------------------- | ------------- | ------------- | ------- |
+| Determinism         | Partial       | Full          | Full    |
+| Adaptive Behavior   | Yes           | Limited       | No      |
+| Audit Trail         | No            | Partial       | Full    |
+| Tamper Detection    | No            | No            | Yes     |
+| Policy Enforcement  | No            | No            | Yes     |
+| Replay Verification | No            | Partial       | Yes     |
+
+---
+
+## Design Constraints
+
+DUMEgov intentionally restricts behavior:
+
+* No silent degradation
+* No optional enforcement
+* No non-deterministic side effects
+
+All operations must be:
+
+* Explicit
+* Verifiable
+* Reproducible
+
+---
+
+## Operational Considerations
+
+### Performance Impact
+
+* Additional hashing and signing overhead
+* Audit log growth over time
+* Slightly increased ingest latency
+
+### Storage Impact
+
+* Audit records stored alongside data
+* Linear growth with ingest volume
+
+---
+
+## Security Notes
+
+Current implementation includes:
+
+* SHA-256 hashing
+* Logical signing abstraction
+
+Not included (but expected in hardened deployments):
+
+* Hardware-backed key management (HSM / Secure Enclave)
+* Certified cryptographic modules
+* Secure key rotation
+* Identity and access control
+* Encrypted transport (TLS/mTLS)
+
+---
+
+## When to Use DUMEgov
+
+Use this layer when:
+
+* Data integrity must be provable
+* System behavior must be auditable
+* Ingestion must be policy-controlled
+* Outputs must be reproducible and defensible
+
+Avoid using it when:
+
+* Maximum throughput is the only priority
+* Data is ephemeral or low-risk
+* Strict guarantees are unnecessary
+
+---
+
+## Design Philosophy
+
+DUMEgov does not attempt to make the system “smarter.”
+It makes the system **accountable**.
+
+Where the hybrid engine adapts,
+and the strict engine guarantees,
+
+DUMEgov **proves**.
+
+---
+
+## Future Extensions
+
+Potential upgrades include:
+
+* Merkle tree–based audit structures
+* Hardware-backed signing (HSM integration)
+* Zero-trust ingestion pipelines
+* Formal verification of audit invariants
+* Policy DSL for dynamic rule definition
+
+---
+
+## Final Note
+
+DUMEgov should be viewed as a **trust layer**, not a feature set.
+
+It transforms DUME from:
+> a deterministic vector system
+
+into:
+> a verifiable system of record for vector evolution
+
 Choosing between them is a system design decision, not a configuration toggle.
