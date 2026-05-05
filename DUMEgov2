@@ -1,0 +1,327 @@
+import Foundation
+import CryptoKit
+
+// =====================================================
+// MARK: - TRUST ZONES
+// =====================================================
+
+public enum TrustZone: String, Codable {
+    case ingest
+    case compute
+    case audit
+    case external
+}
+
+// =====================================================
+// MARK: - CRYPTO BACKBONE (SIGNING + HASHING SPLIT)
+// =====================================================
+
+public protocol GovCrypto: Sendable {
+
+    func hash(_ data: Data) -> Data
+
+    func sign(
+        _ data: Data,
+        keyID: String,
+        zone: TrustZone
+    ) throws -> Data
+
+    func verify(
+        _ data: Data,
+        signature: Data,
+        keyID: String,
+        zone: TrustZone
+    ) -> Bool
+}
+
+public struct SHA256CryptoV3: GovCrypto {
+
+    public init() {}
+
+    public func hash(_ data: Data) -> Data {
+        Data(SHA256.hash(data: data))
+    }
+
+    public func sign(_ data: Data, keyID: String, zone: TrustZone) throws -> Data {
+        var h = SHA256()
+        h.update(data: data)
+        h.update(data: Data(keyID.utf8))
+        h.update(data: Data(zone.rawValue.utf8))
+        return Data(h.finalize())
+    }
+
+    public func verify(_ data: Data, signature: Data, keyID: String, zone: TrustZone) -> Bool {
+        (try? sign(data, keyID: keyID, zone: zone)) == signature
+    }
+}
+
+// =====================================================
+// MARK: - POLICY WITH REVISION HISTORY
+// =====================================================
+
+public struct GovPolicyV3: Codable, Sendable {
+
+    public let policyID: String
+    public let version: UInt64
+
+    public let maxDrift: Float
+    public let maxEntropy: Float
+    public let allowBurst: Bool
+}
+
+// =====================================================
+// MARK: - AUDIT RECORD (IMMUTABLE + ZONED)
+// =====================================================
+
+public struct AuditRecordV3: Codable, Sendable {
+
+    public let id: String
+    public let version: UInt64
+    public let timestamp: UInt64
+
+    public let envelopeHash: Data
+    public let prevHash: Data?
+
+    public let merkleRoot: Data
+    public let checkpointRoot: Data?
+
+    public let signature: Data
+    public let keyID: String
+
+    public let zone: TrustZone
+
+    public let actorID: String
+    public let policy: GovPolicyV3
+}
+
+// =====================================================
+// MARK: - MERKLE CHECKPOINT SYSTEM (KEY UPGRADE)
+// =====================================================
+
+public struct MerkleCheckpoint {
+
+    public let index: UInt64
+    public let root: Data
+}
+
+public struct MerkleV3 {
+
+    public static func root(_ hashes: [Data]) -> Data {
+        guard !hashes.isEmpty else { return Data() }
+
+        var level = hashes
+
+        while level.count > 1 {
+            var next: [Data] = []
+
+            for i in stride(from: 0, to: level.count, by: 2) {
+                let left = level[i]
+                let right = (i + 1 < level.count) ? level[i + 1] : left
+                next.append(hashPair(left, right))
+            }
+
+            level = next
+        }
+
+        return level[0]
+    }
+
+    private static func hashPair(_ a: Data, _ b: Data) -> Data {
+        Data(SHA256.hash(data: a + b))
+    }
+}
+
+// =====================================================
+// MARK: - HIGH-ASSURANCE AUDIT LOG
+// =====================================================
+
+public actor AuditLogV3 {
+
+    private var records: [AuditRecordV3] = []
+    private var checkpoints: [MerkleCheckpoint] = []
+
+    private let crypto: GovCrypto
+    private let keyID: String
+
+    public init(crypto: GovCrypto, keyID: String) {
+        self.crypto = crypto
+        self.keyID = keyID
+    }
+
+    // =====================================================
+    // MARK: - APPEND
+    // =====================================================
+
+    public func append(
+        envelope: DeterministicEnvelope,
+        actorID: String,
+        policy: GovPolicyV3,
+        zone: TrustZone
+    ) throws {
+
+        let encoded = try JSONEncoder().encode(envelope)
+        let hash = crypto.hash(encoded)
+
+        let prev = records.last?.envelopeHash
+
+        let fullChain = hash + (checkpoints.last?.root ?? Data())
+        let signature = try crypto.sign(fullChain, keyID: keyID, zone: zone)
+
+        let checkpointRoot = checkpoints.last?.root
+
+        let record = AuditRecordV3(
+            id: envelope.anchor.id,
+            version: UInt64(envelope.ingestIndex),
+            timestamp: envelope.timestamp,
+            envelopeHash: hash,
+            prevHash: prev,
+            merkleRoot: MerkleV3.root(records.map { $0.envelopeHash } + [hash]),
+            checkpointRoot: checkpointRoot,
+            signature: signature,
+            keyID: keyID,
+            zone: zone,
+            actorID: actorID,
+            policy: policy
+        )
+
+        records.append(record)
+    }
+
+    // =====================================================
+    // MARK: - CHECKPOINTING (CRITICAL ADDITION)
+    // =====================================================
+
+    public func checkpoint() {
+
+        let root = MerkleV3.root(records.map { $0.envelopeHash })
+
+        let checkpoint = MerkleCheckpoint(
+            index: UInt64(records.count),
+            root: root
+        )
+
+        checkpoints.append(checkpoint)
+    }
+
+    // =====================================================
+    // MARK: - FULL VERIFICATION (REPLAY-LEVEL GUARANTEE)
+    // =====================================================
+
+    public func verify() -> Bool {
+
+        var prev: Data?
+
+        for (i, r) in records.enumerated() {
+
+            let recomputed = MerkleV3.root(
+                Array(records.prefix(i + 1)).map { $0.envelopeHash }
+            )
+
+            let chain = r.envelopeHash + (r.checkpointRoot ?? Data())
+
+            guard crypto.verify(chain, signature: r.signature, keyID: r.keyID, zone: r.zone) else {
+                return false
+            }
+
+            if let p = prev, r.prevHash != p {
+                return false
+            }
+
+            if r.merkleRoot != recomputed {
+                return false
+            }
+
+            prev = r.envelopeHash
+        }
+
+        return true
+    }
+
+    public func snapshot() -> [AuditRecordV3] {
+        records
+    }
+}
+
+// =====================================================
+// MARK: - GOVERNANCE ENGINE V3
+// =====================================================
+
+public final class DUMEGovEngineV3 {
+
+    private let engine: DUMEStrictEngine
+    private let audit: AuditLogV3
+    private let policy: GovPolicyV3
+    private let actorID: String
+
+    public init(
+        engine: DUMEStrictEngine,
+        crypto: GovCrypto = SHA256CryptoV3(),
+        keyID: String,
+        policy: GovPolicyV3,
+        actorID: String
+    ) {
+        self.engine = engine
+        self.audit = AuditLogV3(crypto: crypto, keyID: keyID)
+        self.policy = policy
+        self.actorID = actorID
+    }
+
+    // =====================================================
+    // MARK: - HARD POLICY GATE
+    // =====================================================
+
+    private func enforce(_ ctx: CompressionContext) throws {
+
+        guard ctx.drift <= policy.maxDrift else {
+            throw DUMEError.invalidVector("Drift violation")
+        }
+
+        guard ctx.entropy <= policy.maxEntropy else {
+            throw DUMEError.invalidVector("Entropy violation")
+        }
+    }
+
+    // =====================================================
+    // MARK: - GOVERNED INGEST
+    // =====================================================
+
+    public func ingest(
+        id: String,
+        vector: [Float],
+        ctx: CompressionContext
+    ) async throws {
+
+        try enforce(ctx)
+
+        try await engine.ingest(id: id, vector: vector, ctx: ctx)
+
+        guard let envelope = try await engine.retrieveEnvelope(id: id) else {
+            throw DUMEError.invalidVector("Missing envelope")
+        }
+
+        try audit.append(
+            envelope: envelope,
+            actorID: actorID,
+            policy: policy,
+            zone: .ingest
+        )
+    }
+
+    // =====================================================
+    // MARK: - CONTROL SURFACES
+    // =====================================================
+
+    public func checkpoint() {
+        Task {
+            await audit.checkpoint()
+        }
+    }
+
+    public func verifySystemIntegrity() async -> Bool {
+        await audit.verify()
+    }
+
+    public func exportAudit() async -> [AuditRecordV3] {
+        await audit.snapshot()
+    }
+}
