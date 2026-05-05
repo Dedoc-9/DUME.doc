@@ -1,0 +1,300 @@
+# DUME Hybrid Engine
+
+**Deterministic Unified Manifold Engine (DUME)** is a high-performance vector ingestion and retrieval system designed for **predictable behavior, adaptive compression, and manifold-aware learning**.
+
+It provides two interchangeable execution models:
+
+* **Strict Engine** → fully deterministic, replayable, distributed-safe
+* **Hybrid Engine** → adaptive, performance-optimized, and fault-tolerant
+
+---
+
+## Core Concepts
+
+DUME is built around a few non-negotiable principles:
+
+* **Deterministic envelopes** as the source of truth
+* **Sparse compression** for storage efficiency
+* **Speculative reconstruction** to improve vector continuity
+* **Graph-based manifold learning** for structural awareness
+* **Graceful degradation** (hybrid mode) or **strict guarantees** (strict mode)
+
+---
+
+## Architecture Overview
+
+```
+          ┌──────────────┐
+          │   INGEST     │
+          └──────┬───────┘
+                 ↓
+        ┌──────────────────┐
+        │ Speculation Layer │
+        └──────────────────┘
+                 ↓
+        ┌──────────────────┐
+        │ Compression Layer │
+        └──────────────────┘
+                 ↓
+        ┌──────────────────┐
+        │ Deterministic     │
+        │   Envelope        │
+        └──────────────────┘
+                 ↓
+        ┌──────────────────┐
+        │   Storage Layer   │
+        └──────────────────┘
+                 ↓
+        ┌──────────────────┐
+        │ Index + Graph     │
+        └──────────────────┘
+```
+
+---
+
+## Engine Variants
+
+### 1. Strict Engine (`DUMEStrictEngine`)
+
+The strict engine prioritizes **correctness and reproducibility over flexibility**.
+
+#### Guarantees
+
+* Deterministic ingest order (monotonic clock)
+* Replayable state from log
+* No hidden mutation or runtime injection
+* Ordered CRDT-based global synchronization
+* Fixed blending and projection rules
+
+#### Characteristics
+
+* All subsystems are always present
+* No optional fallbacks
+* No detached async writes
+* Manifold projection is enforced during ingest
+
+#### Use Cases
+
+* Distributed systems requiring consistency
+* Auditability / compliance pipelines
+* Scientific or reproducible ML workflows
+* Multi-node synchronization
+
+---
+
+### 2. Hybrid Engine (`DUMEHybridEngine`)
+
+The hybrid engine prioritizes **adaptability and performance under real-world conditions**.
+
+#### Features
+
+* Optional subsystems (speculation, evolution, burst protection)
+* Approximate nearest neighbor indexing
+* Graceful degradation if components fail
+* Tiered storage support (hot + cold)
+* Gossip-based eventual consistency
+
+#### Tradeoffs
+
+* Not strictly deterministic across nodes
+* Merge behavior depends on timing
+* Some internal heuristics are adaptive
+
+#### Use Cases
+
+* Real-time systems
+* Edge deployments
+* High-throughput ingestion pipelines
+* Systems where availability > strict consistency
+
+---
+
+## Manifold Extensions
+
+DUME supports distributed manifold learning via:
+
+### Graph Evolution
+
+* Incremental structure learning
+* k-nearest connectivity
+* Local topology refinement
+
+### Gossip Coordination
+
+* Cluster-wide delta propagation
+* CRDT-like merge semantics
+
+### Drift Monitoring
+
+* Detects instability in vector space
+* Enables adaptive renormalization
+
+### Renormalization
+
+* Stabilizes vectors under high drift conditions
+
+---
+
+## Storage Model
+
+### Deterministic Envelope
+
+All ingested data is wrapped in a canonical structure:
+
+* Anchor (compressed vector)
+* Metadata (entropy, drift, phase)
+* Version + timestamp
+* Checksum
+
+This ensures:
+
+* Replayability
+* Integrity
+* Forward compatibility
+
+---
+
+## Compression Strategy
+
+* Sparse encoding based on:
+
+  * Entropy
+  * Drift
+  * Burst conditions
+* Designed to:
+
+  * Minimize storage footprint
+  * Preserve reconstructability
+  * Avoid expensive decode paths
+
+---
+
+## Retrieval Path
+
+Retrieval is intentionally simple:
+
+1. Load envelope from storage
+2. Return cached dense vector (if available)
+3. Otherwise decompress
+
+No speculation or graph logic is applied during retrieval.
+
+---
+
+## Distributed Operation
+
+| Feature           | Hybrid Engine    | Strict Engine      |
+| ----------------- | ---------------- | ------------------ |
+| Consistency Model | Eventual         | Deterministic      |
+| Merge Strategy    | Heuristic / CRDT | Total ordered CRDT |
+| Replayable        | No               | Yes                |
+| Clock             | System time      | Monotonic counter  |
+| Sync Mechanism    | Gossip           | Ordered log replay |
+
+---
+
+## Example Usage
+
+### Hybrid Engine
+
+```swift
+let engine = DUMEHybridEngine(
+    metric: metric,
+    storage: storage,
+    enableEvolution: true,
+    enableSpeculation: true
+)
+
+try await engine.ingest(
+    id: "vec-1",
+    vector: embedding,
+    ctx: context
+)
+```
+
+---
+
+### Strict Engine
+
+```swift
+let engine = DUMEStrictEngine(
+    metric: metric,
+    storage: storage
+)
+
+try await engine.ingest(
+    id: "vec-1",
+    vector: embedding,
+    ctx: context
+)
+
+await engine.reconcile()
+```
+
+---
+
+## When to Use Which
+
+Use **Strict Engine** if:
+
+* You need reproducibility
+* You run multi-node systems
+* You care about deterministic debugging
+
+Use **Hybrid Engine** if:
+
+* You need speed and flexibility
+* You operate under variable load
+* You prioritize uptime over exact consistency
+
+---
+
+## Design Tradeoffs
+
+| Area        | Hybrid                      | Strict                      |
+| ----------- | --------------------------- | --------------------------- |
+| Flexibility | High                        | Low                         |
+| Determinism | Partial                     | Full                        |
+| Performance | Higher (adaptive)           | Slightly lower (controlled) |
+| Complexity  | Lower surface, hidden logic | Explicit, predictable       |
+
+---
+
+## Extensibility
+
+You can extend DUME with:
+
+* Custom distance metrics
+* Alternative compression strategies
+* Different storage backends
+* GPU-accelerated indexing
+* Advanced manifold projection (e.g., Laplacian methods)
+
+---
+
+## Future Work
+
+* Deterministic ANN structures
+* Formal verification of merge logic
+* SIMD / GPU acceleration
+* Streaming ingestion pipelines
+* Adaptive manifold curvature modeling
+
+---
+
+## License
+
+TBD
+
+---
+
+## Final Notes
+
+DUME is not just a vector store—it is a **controlled evolution system for high-dimensional data**.
+
+The strict and hybrid engines are intentionally different:
+
+* One guarantees correctness
+* The other maximizes survivability
+
+Choosing between them is a system design decision, not a configuration toggle.
