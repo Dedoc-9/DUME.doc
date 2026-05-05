@@ -1,0 +1,309 @@
+import Foundation
+
+// =====================================================
+// MARK: - STRICT ENGINE CONFIG
+// =====================================================
+
+public struct DUMEStrictConfig: Sendable {
+
+    public let enableEvolution: Bool
+    public let enableSpeculation: Bool
+    public let enableBurstProtection: Bool
+    public let enableGlobalSync: Bool
+
+    public init(
+        evolution: Bool = true,
+        speculation: Bool = true,
+        burst: Bool = true,
+        global: Bool = true
+    ) {
+        self.enableEvolution = evolution
+        self.enableSpeculation = speculation
+        self.enableBurstProtection = burst
+        self.enableGlobalSync = global
+    }
+}
+
+// =====================================================
+// MARK: - TOTAL ORDER CLOCK (DETERMINISM GUARANTEE)
+// =====================================================
+
+public protocol DeterministicClock: Sendable {
+    func tick() -> UInt64
+}
+
+public final class MonotonicClock: DeterministicClock {
+
+    private var counter: UInt64 = 0
+    private let lock = NSLock()
+
+    public init() {}
+
+    public func tick() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        counter += 1
+        return counter
+    }
+}
+
+// =====================================================
+// MARK: - STRICT GOSSIP (ORDERED CRDT LOG)
+// =====================================================
+
+public struct OrderedDelta: Codable, Sendable {
+    public let id: String
+    public let vector: [Float]
+    public let version: UInt64
+}
+
+// Deterministic log merge (TOTAL ORDER)
+public struct OrderedMerge {
+
+    public static func merge(
+        _ a: [OrderedDelta],
+        _ b: [OrderedDelta]
+    ) -> [OrderedDelta] {
+
+        let combined = a + b
+
+        // STRICT ordering: (version, id)
+        return combined
+            .sorted {
+                if $0.version == $1.version {
+                    return $0.id < $1.id
+                }
+                return $0.version < $1.version
+            }
+            .reduce(into: [String: OrderedDelta]()) { acc, delta in
+                acc[delta.id] = delta
+            }
+            .values
+            .sorted {
+                if $0.version == $1.version {
+                    return $0.id < $1.id
+                }
+                return $0.version < $1.version
+            }
+    }
+}
+
+// Actor-safe deterministic log
+public actor StrictGossip {
+
+    private var log: [OrderedDelta] = []
+
+    public init() {}
+
+    public func append(_ delta: OrderedDelta) {
+        log.append(delta)
+    }
+
+    public func snapshot() -> [OrderedDelta] {
+        log
+    }
+
+    public func merge(with incoming: [OrderedDelta]) {
+        log = OrderedMerge.merge(log, incoming)
+    }
+}
+
+// =====================================================
+// MARK: - MANIFOLD CONSTRAINT LAYER
+// =====================================================
+
+public struct ManifoldProjector {
+
+    // Enforces local smoothness constraint
+    public static func project(
+        vector: [Float],
+        neighbors: [[Float]],
+        strength: Float
+    ) -> [Float] {
+
+        guard !neighbors.isEmpty else { return vector }
+
+        var mean = Array(repeating: Float(0), count: vector.count)
+
+        for n in neighbors {
+            for i in 0..<vector.count {
+                mean[i] += n[i]
+            }
+        }
+
+        let inv = 1.0 / Float(neighbors.count)
+        mean = mean.map { $0 * inv }
+
+        return zip(vector, mean).map {
+            ($0 * (1 - strength)) + ($1 * strength)
+        }
+    }
+}
+
+// =====================================================
+// MARK: - STRICT ENGINE
+// =====================================================
+
+public final class DUMEStrictEngine {
+
+    // Core
+    private let metric: DUMEMetric
+    private let storage: any DUMEPersistentStorage
+    private let compression: SparseCompression
+    private let speculator: SpeculativeEngine
+
+    // Deterministic systems
+    private let clock: DeterministicClock
+    private let config: DUMEStrictConfig
+
+    // Subsystems (NO OPTIONALS)
+    private let graph: GraphEvolution
+    private let index: ApproximateIndex
+    private let burst: BurstDetector
+    private let gossip: StrictGossip
+    private let drift: DriftMonitor
+
+    // State
+    private var ingestCount: UInt64 = 0
+
+    // =====================================================
+    // INIT
+    // =====================================================
+
+    public init(
+        metric: DUMEMetric,
+        storage: any DUMEPersistentStorage,
+        compression: SparseCompression = .init(),
+        speculator: SpeculativeEngine = .init(),
+        clock: DeterministicClock = MonotonicClock(),
+        config: DUMEStrictConfig = .init()
+    ) {
+        self.metric = metric
+        self.storage = storage
+        self.compression = compression
+        self.speculator = speculator
+        self.clock = clock
+        self.config = config
+
+        self.graph = GraphEvolution(metric: metric, k: 3)
+        self.index = ApproximateIndex()
+        self.burst = BurstDetector()
+        self.gossip = StrictGossip()
+        self.drift = DriftMonitor()
+    }
+
+    // =====================================================
+    // MARK: - STRICT INGEST
+    // =====================================================
+
+    public func ingest(
+        id: String,
+        vector: [Float],
+        ctx: CompressionContext
+    ) async throws {
+
+        precondition(!id.isEmpty)
+        precondition(!vector.isEmpty)
+
+        let version = clock.tick()
+        ingestCount = version
+
+        // Drift tracking
+        drift.record(ctx.drift)
+
+        var working = vector
+
+        // Burst
+        if config.enableBurstProtection {
+            burst.update(entropy: ctx.entropy)
+        }
+
+        let isBurst = burst.isBurstMode
+
+        // Speculation (strict gating)
+        if config.enableSpeculation && !isBurst {
+            if let nearest = index.nearest(to: vector, metric: metric) {
+
+                let velocity = zip(vector, nearest).map(-)
+                let result = speculator.speculate(current: nearest, velocity: velocity)
+
+                if result.isValid {
+                    working = zip(vector, result.predicted).map {
+                        ($0 * 0.5) + ($1 * 0.5)
+                    }
+                }
+            }
+        }
+
+        // Manifold projection (NEW STRICT STEP)
+        if config.enableEvolution {
+            let neighbors = graph.neighbors(of: vector)
+            working = ManifoldProjector.project(
+                vector: working,
+                neighbors: neighbors,
+                strength: 0.15
+            )
+        }
+
+        // Compression
+        let (values, indices) = try compression.compress(
+            working,
+            entropy: ctx.entropy,
+            drift: ctx.drift,
+            isBurstMode: isBurst
+        )
+
+        let anchor = Anchor(
+            id: id,
+            values: values,
+            indices: indices,
+            denseCache: nil,
+            version: Int(version),
+            timestamp: version,
+            originalSize: vector.count
+        )
+
+        let envelope = DeterministicEnvelope(
+            anchor: anchor,
+            entropy: ctx.entropy,
+            drift: ctx.drift,
+            isBurst: isBurst,
+            phase: .active,
+            speculationApplied: config.enableSpeculation,
+            speculationConfidence: nil,
+            ingestIndex: Int(version),
+            timestamp: version,
+            checksum: "\(id)-\(version)"
+        )
+
+        // STRICT persistence (no detached writes)
+        try await storage.put(envelope)
+
+        // Update subsystems deterministically
+        index.insert(id: id, vector: working)
+        graph.update(id: id, vector: working)
+
+        // Append to ordered log
+        if config.enableGlobalSync {
+            await gossip.append(
+                OrderedDelta(id: id, vector: working, version: version)
+            )
+        }
+    }
+
+    // =====================================================
+    // MARK: - STRICT GLOBAL RECONCILIATION
+    // =====================================================
+
+    public func reconcile() async {
+
+        guard config.enableGlobalSync else { return }
+
+        let snapshot = await gossip.snapshot()
+
+        // Replay in deterministic order
+        for delta in snapshot {
+            graph.update(id: delta.id, vector: delta.vector)
+        }
+    }
+}
