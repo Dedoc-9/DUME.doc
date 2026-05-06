@@ -1,0 +1,145 @@
+DUME/
+├── DUME.swift                 // Top-level exports / public surface
+
+├── Core/
+│   ├── Envelope/
+│   │   ├── DeterministicEnvelope.swift
+│   │   ├── Anchor.swift
+│   │   └── EnvelopeMetadata.swift
+│   │
+│   ├── Compression/
+│   │   ├── SparseCompression.swift
+│   │   └── CompressionContext.swift
+│   │
+│   ├── Metrics/
+│   │   └── DUMEMetric.swift
+│   │
+│   ├── Types/
+│   │   ├── SystemPhase.swift
+│   │   ├── Errors.swift
+│   │   └── SharedModels.swift
+│   │
+│   └── Utils/
+│       └── Helpers.swift
+
+├── Engine/
+│   ├── Strict/
+│   │   ├── DUMEStrictEngine.swift
+│   │   ├── DUMEStrictConfig.swift
+│   │   ├── DeterministicClock.swift
+│   │   ├── MonotonicClock.swift
+│   │   ├── StrictGossip.swift
+│   │   ├── OrderedDelta.swift
+│   │   └── OrderedMerge.swift
+│   │
+│   ├── Hybrid/
+│   │   ├── DUMEHybridEngine.swift
+│   │   ├── HybridPhase.swift
+│   │   └── HybridConfig.swift
+│   │
+│   ├── Speculation/
+│   │   └── SpeculativeEngine.swift
+│   │
+│   ├── Burst/
+│   │   └── BurstDetector.swift
+│   │
+│   ├── Drift/
+│   │   └── DriftMonitor.swift
+│   │
+│   └── Clock/
+│       ├── SystemClock.swift
+│       └── RealClock.swift
+
+├── Manifold/
+│   ├── Graph/
+│   │   ├── GraphEvolution.swift
+│   │   └── GraphNode.swift
+│   │
+│   ├── Projection/
+│   │   └── ManifoldProjector.swift
+│   │
+│   ├── Evolution/
+│   │   └── NeighborSelection.swift
+│   │
+│   └── Renormalization/
+│       └── Renormalizer.swift
+
+├── Indexing/
+│   └── ApproximateIndex.swift
+
+├── Storage/
+│   ├── Protocols/
+│   │   └── DUMEPersistentStorage.swift
+│   │
+│   ├── Tiered/
+│   │   └── TieredStorage.swift
+│   │
+│   └── Backends/
+│       ├── MemoryStorage.swift
+│       ├── DiskStorage.swift
+│       └── CloudStorage.swift
+
+├── Transport/
+│   ├── Events/
+│   │   ├── DUMEEvent.swift
+│   │   └── EventBus.swift
+│   │
+│   ├── Gossip/
+│   │   ├── GossipCoordinator.swift
+│   │   └── GraphDelta.swift
+│   │
+│   └── Partitioning/
+│       └── DUMEPartitioner.swift
+
+├── Governance/
+│   ├── Crypto/
+│   │   ├── GovCrypto.swift
+│   │   └── SHA256CryptoV3.swift
+│   │
+│   ├── Policy/
+│   │   └── GovPolicyV3.swift
+│   │
+│   ├── Audit/
+│   │   ├── AuditRecordV3.swift
+│   │   ├── AuditLogV3.swift
+│   │   └── MerkleV3.swift
+│   │
+│   └── Engine/
+│       └── DUMEGovEngineV3.swift
+
+├── Distributed/
+│   ├── Compute/
+│   │   └── DUMEEngineNode.swift
+│   │
+│   ├── Reconciliation/
+│   │   └── GlobalReconciler.swift
+│   │
+│   └── Sharding/
+│       └── DUMEPartitioner.swift
+
+├── Extensions/
+│   ├── HybridDistributedExtension.swift
+│   └── GlobalManifold/
+│       ├── GraphMergePolicy.swift
+│       └── ClusterOps.swift
+
+├── API/
+│   ├── REST/
+│   │   └── Routes.swift
+│   │
+│   ├── gRPC/
+│   │   └── Service.swift
+│   │
+│   └── SDK/
+│       ├── DUMEClient.swift
+│       └── Models.swift
+
+└── Apps/
+    ├── CLI/
+    │   └── main.swift
+    │
+    ├── Demo/
+    │   └── DemoApp.swift
+    │
+    └── iOS/
+        └── DUMEKit.swift
