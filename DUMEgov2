@@ -324,4 +324,58 @@ public final class DUMEGovEngineV3 {
     public func exportAudit() async -> [AuditRecordV3] {
         await audit.snapshot()
     }
+    // =====================================================
+    // MARK: - CONTROL SURFACES (CONTINUED)
+    // =====================================================
+
+    /// Triggers a cryptographic checkpoint of the current audit state.
+    /// This fixes the Merkle root in the log history.
+    public func commitCheckpoint() async {
+        await audit.checkpoint()
+    }
+
+    /// Performs a full integrity sweep of the audit log.
+    /// Ensures hashes, signatures, and Merkle roots are consistent.
+    public func verifyIntegrity() async -> Bool {
+        await audit.verify()
+    }
+
+    /// Exports the immutable audit trail for external compliance.
+    public func exportAuditLog() async -> [AuditRecordV3] {
+        await audit.snapshot()
+    }
+}
+
+// =====================================================
+// MARK: - ERRORS & CONTEXT (SUPPORT)
+// =====================================================
+
+public enum DUMEError: Error {
+    case invalidVector(String)
+    case integrityFailure(String)
+    case policyViolation(String)
+}
+
+/// Mock of the expected context/envelope types for context
+public struct CompressionContext: Sendable {
+    public let drift: Float
+    public let entropy: Float
+}
+
+public struct DeterministicEnvelope: Codable, Sendable {
+    public let anchor: Anchor
+    public let ingestIndex: Int
+    public let timestamp: UInt64
+    
+    public struct Anchor: Codable, Sendable {
+        public let id: String
+    }
+}
+
+/// Placeholder for the underlying engine being governed
+public protocol DUMEStrictEngine {
+    func ingest(id: String, vector: [Float], ctx: CompressionContext) async throws
+    func retrieveEnvelope(id: String) async throws -> DeterministicEnvelope?
+}
+
 }
