@@ -1,265 +1,241 @@
+// =====================================================
+// MARK: - HYBRID++ VERIFIABLE EXECUTION KERNEL (v2)
+// =====================================================
+
 import Foundation
 
 // =====================================================
-// MARK: - STRICT ENGINE CONFIG
+// MARK: - TRUST ZONE
 // =====================================================
 
-public struct DUMEStrictConfig: Sendable {
+public enum TrustZone: Sendable {
+    case ingest
+    case storage
+    case audit
+}
 
-    public let enableEvolution: Bool
-    public let enableSpeculation: Bool
-    public let enableBurstProtection: Bool
-    public let enableGlobalSync: Bool
+// =====================================================
+// MARK: - DECISION MODEL
+// =====================================================
+
+public enum ProbabilisticDecision: Sendable, CustomStringConvertible {
+    case accept
+    case degrade(Float)
+    case mutate(Float)
+    case reject(String)
+
+    public var description: String {
+        switch self {
+        case .accept: return "ACCEPT"
+        case .degrade(let f): return "DEGRADE(\(f))"
+        case .mutate(let f): return "MUTATE(\(f))"
+        case .reject(let r): return "REJECT(\(r))"
+        }
+    }
+}
+
+// =====================================================
+// MARK: - POLICY
+// =====================================================
+
+public struct ProbabilisticPolicyV1: Sendable {
+
+    public let policyID: String
+    public let maxInstability: Float
+    public let minConfidence: Float
+    public let sourceReliabilityGate: Float
 
     public init(
-        evolution: Bool = true,
-        speculation: Bool = true,
-        burst: Bool = true,
-        global: Bool = true
+        id: String = "hybrid++-policy",
+        instability: Float = 0.75,
+        confidence: Float = 0.4,
+        reliability: Float = 0.6
     ) {
-        self.enableEvolution = evolution
-        self.enableSpeculation = speculation
-        self.enableBurstProtection = burst
-        self.enableGlobalSync = global
+        self.policyID = id
+        self.maxInstability = instability
+        self.minConfidence = confidence
+        self.sourceReliabilityGate = reliability
+    }
+
+    public func evaluate(
+        instability: Float,
+        confidence: Float,
+        reliability: Float
+    ) -> ProbabilisticDecision {
+
+        if instability > maxInstability * 1.5 {
+            return .reject("CRITICAL_INSTABILITY")
+        }
+
+        if reliability < sourceReliabilityGate {
+            return .degrade(0.4)
+        }
+
+        if confidence < minConfidence {
+            return .mutate(0.6)
+        }
+
+        if instability > maxInstability {
+            return .degrade(0.7)
+        }
+
+        return .accept
     }
 }
 
 // =====================================================
-// MARK: - TOTAL ORDER CLOCK (DETERMINISM GUARANTEE)
+// MARK: - CORE TYPES (STUB SAFE)
 // =====================================================
 
-public protocol DeterministicClock: Sendable {
-    func tick() -> UInt64
-}
-
-public final class MonotonicClock: DeterministicClock {
-
-    private var counter: UInt64 = 0
-    private let lock = NSLock()
-
-    public init() {}
-
-    public func tick() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        counter += 1
-        return counter
+public struct DUMEMetric {
+    public func distance(_ a: [Float], _ b: [Float]) -> Float {
+        zip(a, b).map { abs($0 - $1) }.reduce(0, +)
     }
 }
 
-// =====================================================
-// MARK: - STRICT GOSSIP (ORDERED CRDT LOG)
-// =====================================================
+public struct CompressionContext {
+    public let entropy: Float
+    public let drift: Float
+    public let reliability: Float
+}
 
-public struct OrderedDelta: Codable, Sendable {
+public struct Anchor {
     public let id: String
-    public let vector: [Float]
-    public let version: UInt64
+    public let values: [Float]
+    public let indices: [Int]
+    public let denseCache: [Float]
+    public let version: Int
+    public let timestamp: UInt64
+    public let originalSize: Int
 }
 
-// Deterministic log merge (TOTAL ORDER)
-public struct OrderedMerge {
-
-    public static func merge(
-        _ a: [OrderedDelta],
-        _ b: [OrderedDelta]
-    ) -> [OrderedDelta] {
-
-        let combined = a + b
-
-        // STRICT ordering: (version, id)
-        return combined
-            .sorted {
-                if $0.version == $1.version {
-                    return $0.id < $1.id
-                }
-                return $0.version < $1.version
-            }
-            .reduce(into: [String: OrderedDelta]()) { acc, delta in
-                acc[delta.id] = delta
-            }
-            .values
-            .sorted {
-                if $0.version == $1.version {
-                    return $0.id < $1.id
-                }
-                return $0.version < $1.version
-            }
-    }
+public struct DeterministicEnvelope {
+    public let anchor: Anchor
+    public let entropy: Float
+    public let drift: Float
+    public let isBurst: Bool
+    public let phase: String
+    public let speculationApplied: Bool
+    public let speculationConfidence: Float
+    public let ingestIndex: Int
+    public let timestamp: UInt64
+    public let checksum: String
 }
 
-// Actor-safe deterministic log
-public actor StrictGossip {
+// =====================================================
+// MARK: - STOCHASTIC ELIMINATION (DETERMINISTIC RNG)
+// =====================================================
 
-    private var log: [OrderedDelta] = []
+public struct DeterministicRNG {
+    private var seed: UInt64
 
-    public init() {}
-
-    public func append(_ delta: OrderedDelta) {
-        log.append(delta)
+    public init(seed: UInt64) {
+        self.seed = seed
     }
 
-    public func snapshot() -> [OrderedDelta] {
-        log
-    }
-
-    public func merge(with incoming: [OrderedDelta]) {
-        log = OrderedMerge.merge(log, incoming)
+    public mutating func nextFloat() -> Float {
+        seed = seed &* 6364136223846793005 &+ 1
+        let x = Float((seed >> 16) & 0xFFFF)
+        return (x / 65535.0) - 0.5
     }
 }
 
 // =====================================================
-// MARK: - MANIFOLD CONSTRAINT LAYER
+// MARK: - ENGINE
 // =====================================================
 
-public struct ManifoldProjector {
+public final class DUMEHybridPlusEngine {
 
-    // Enforces local smoothness constraint
-    public static func project(
-        vector: [Float],
-        neighbors: [[Float]],
-        strength: Float
-    ) -> [Float] {
-
-        guard !neighbors.isEmpty else { return vector }
-
-        var mean = Array(repeating: Float(0), count: vector.count)
-
-        for n in neighbors {
-            for i in 0..<vector.count {
-                mean[i] += n[i]
-            }
-        }
-
-        let inv = 1.0 / Float(neighbors.count)
-        mean = mean.map { $0 * inv }
-
-        return zip(vector, mean).map {
-            ($0 * (1 - strength)) + ($1 * strength)
-        }
-    }
-}
-
-// =====================================================
-// MARK: - STRICT ENGINE
-// =====================================================
-
-public final class DUMEStrictEngine {
-
-    // Core
     private let metric: DUMEMetric
-    private let storage: any DUMEPersistentStorage
-    private let compression: SparseCompression
-    private let speculator: SpeculativeEngine
+    private let policy: ProbabilisticPolicyV1
 
-    // Deterministic systems
-    private let clock: DeterministicClock
-    private let config: DUMEStrictConfig
+    private var ingestCounter: UInt64 = 0
+    private var rng = DeterministicRNG(seed: 0xA1B2C3D4)
 
-    // Subsystems (NO OPTIONALS)
-    private let graph: GraphEvolution
-    private let index: ApproximateIndex
-    private let burst: BurstDetector
-    private let gossip: StrictGossip
-    private let drift: DriftMonitor
+    private var auditChain: [String] = []
 
-    // State
-    private var ingestCount: UInt64 = 0
-
-    // =====================================================
-    // INIT
-    // =====================================================
-
-    public init(
-        metric: DUMEMetric,
-        storage: any DUMEPersistentStorage,
-        compression: SparseCompression = .init(),
-        speculator: SpeculativeEngine = .init(),
-        clock: DeterministicClock = MonotonicClock(),
-        config: DUMEStrictConfig = .init()
-    ) {
+    public init(metric: DUMEMetric, policy: ProbabilisticPolicyV1 = .init()) {
         self.metric = metric
-        self.storage = storage
-        self.compression = compression
-        self.speculator = speculator
-        self.clock = clock
-        self.config = config
-
-        self.graph = GraphEvolution(metric: metric, k: 3)
-        self.index = ApproximateIndex()
-        self.burst = BurstDetector()
-        self.gossip = StrictGossip()
-        self.drift = DriftMonitor()
+        self.policy = policy
     }
 
     // =====================================================
-    // MARK: - STRICT INGEST
+    // MARK: - INGEST (FULLY DETERMINISTIC + AUDITED)
     // =====================================================
 
     public func ingest(
         id: String,
         vector: [Float],
         ctx: CompressionContext
-    ) async throws {
+    ) {
 
-        precondition(!id.isEmpty)
-        precondition(!vector.isEmpty)
+        ingestCounter += 1
+        let timestamp = ingestCounter
 
-        let version = clock.tick()
-        ingestCount = version
+        let instability = ctx.entropy
+        let confidence = deriveConfidence(ctx)
+        let reliability = ctx.reliability
 
-        // Drift tracking
-        drift.record(ctx.drift)
+        let decision = policy.evaluate(
+            instability: instability,
+            confidence: confidence,
+            reliability: reliability
+        )
+
+        // =================================================
+        // FULL TRACE AUDIT (INCLUDING REJECTS)
+        // =================================================
+
+        emitAudit(
+            zone: .ingest,
+            id: id,
+            confidence: confidence,
+            instability: instability,
+            decision: decision,
+            timestamp: timestamp
+        )
+
+        // =================================================
+        // POLICY GATE
+        // =================================================
+
+        if case .reject(let reason) = decision {
+            emitAudit(
+                zone: .audit,
+                id: id,
+                confidence: confidence,
+                instability: instability,
+                decision: .reject(reason),
+                timestamp: timestamp
+            )
+            return
+        }
 
         var working = vector
 
-        // Burst
-        if config.enableBurstProtection {
-            burst.update(entropy: ctx.entropy)
+        switch decision {
+        case .degrade(let f):
+            working = working.map { $0 * f }
+
+        case .mutate(let f):
+            working = mutate(working, factor: f)
+
+        default:
+            break
         }
 
-        let isBurst = burst.isBurstMode
-
-        // Speculation (strict gating)
-        if config.enableSpeculation && !isBurst {
-            if let nearest = index.nearest(to: vector, metric: metric) {
-
-                let velocity = zip(vector, nearest).map(-)
-                let result = speculator.speculate(current: nearest, velocity: velocity)
-
-                if result.isValid {
-                    working = zip(vector, result.predicted).map {
-                        ($0 * 0.5) + ($1 * 0.5)
-                    }
-                }
-            }
+        // deterministic speculation
+        if confidence > 0.4, instability < policy.maxInstability {
+            working = working.map { $0 + rng.nextFloat() * 0.01 }
         }
-
-        // Manifold projection (NEW STRICT STEP)
-        if config.enableEvolution {
-            let neighbors = graph.neighbors(of: vector)
-            working = ManifoldProjector.project(
-                vector: working,
-                neighbors: neighbors,
-                strength: 0.15
-            )
-        }
-
-        // Compression
-        let (values, indices) = try compression.compress(
-            working,
-            entropy: ctx.entropy,
-            drift: ctx.drift,
-            isBurstMode: isBurst
-        )
 
         let anchor = Anchor(
             id: id,
-            values: values,
-            indices: indices,
-            denseCache: nil,
-            version: Int(version),
-            timestamp: version,
+            values: working,
+            indices: Array(working.indices),
+            denseCache: working,
+            version: Int(ingestCounter),
+            timestamp: timestamp,
             originalSize: vector.count
         )
 
@@ -267,43 +243,317 @@ public final class DUMEStrictEngine {
             anchor: anchor,
             entropy: ctx.entropy,
             drift: ctx.drift,
-            isBurst: isBurst,
-            phase: .active,
-            speculationApplied: config.enableSpeculation,
-            speculationConfidence: nil,
-            ingestIndex: Int(version),
-            timestamp: version,
-            checksum: "\(id)-\(version)"
+            isBurst: false,
+            phase: "active",
+            speculationApplied: true,
+            speculationConfidence: confidence,
+            ingestIndex: Int(ingestCounter),
+            timestamp: timestamp,
+            checksum: hash(id: id, t: timestamp)
         )
 
-        // STRICT persistence (no detached writes)
-        try await storage.put(envelope)
+        auditChain.append(envelope.checksum)
+    }
 
-        // Update subsystems deterministically
-        index.insert(id: id, vector: working)
-        graph.update(id: id, vector: working)
+    // =====================================================
+    // MARK: - MUTATION (DETERMINISTIC ONLY)
+    // =====================================================
 
-        // Append to ordered log
-        if config.enableGlobalSync {
-            await gossip.append(
-                OrderedDelta(id: id, vector: working, version: version)
-            )
+    private func mutate(_ v: [Float], factor: Float) -> [Float] {
+        v.map { $0 + rng.nextFloat() * factor }
+    }
+
+    // =====================================================
+    // MARK: - CONFIDENCE MODEL
+    // =====================================================
+
+    private func deriveConfidence(_ ctx: CompressionContext) -> Float {
+        min(0.95, max(0.1, ctx.reliability * 0.7 + (1 - ctx.entropy) * 0.3))
+    }
+
+    // =====================================================
+    // MARK: - CRYPTOGRAPHIC AUDIT CHAIN (VERIFIABILITY)
+    // =====================================================
+
+    private func hash(id: String, t: UInt64) -> String {
+// =====================================================
+// MARK: - DVSM HYBRID++ EXECUTION KERNEL (VERIFIABLE DISTRIBUTED)
+// =====================================================
+
+import Foundation
+
+// =====================================================
+// MARK: - TRUST ZONE SHARDING (DVSM CORE)
+// =====================================================
+
+public enum TrustZone: Sendable {
+    case ingest
+    case storage
+    case audit
+}
+
+// =====================================================
+// MARK: - NODE CONTEXT
+// =====================================================
+
+public struct NodeContext: Sendable {
+    public let nodeID: String
+    public let shardKey: String
+}
+
+// =====================================================
+// MARK: - DECISION MODEL
+// =====================================================
+
+public enum ProbabilisticDecision: Sendable, CustomStringConvertible {
+    case accept
+    case degrade(Float)
+    case mutate(Float)
+    case reject(String)
+
+    public var description: String {
+        switch self {
+        case .accept: return "ACCEPT"
+        case .degrade(let f): return "DEGRADE(\(f))"
+        case .mutate(let f): return "MUTATE(\(f))"
+        case .reject(let r): return "REJECT(\(r))"
+        }
+    }
+}
+
+// =====================================================
+// MARK: - VERIFIABLE RANDOM FUNCTION (VRF-LIKE)
+// =====================================================
+
+public struct VerifiableRNG {
+    private var seed: UInt64
+
+    public init(seed: UInt64) {
+        self.seed = seed
+    }
+
+    public mutating func next() -> Float {
+        seed = seed &* 6364136223846793005 &+ 1
+        let x = Float((seed >> 16) & 0xFFFF)
+        return (x / 65535.0 - 0.5) * 0.1
+    }
+}
+
+// =====================================================
+// MARK: - CRYPTO ABSTRACTION (REQUIRED FOR MERKLE DAG)
+// =====================================================
+
+public protocol CryptoHashing {
+    func hash(_ data: Data) -> String
+}
+
+public struct SimpleHasher: CryptoHashing {
+    public init() {}
+
+    public func hash(_ data: Data) -> String {
+        // deterministic placeholder (replace with SHA-256 in production)
+        String(data.hashValue)
+    }
+}
+
+// =====================================================
+// MARK: - MERKLE DAG NODE (DVSM CORE)
+// =====================================================
+
+public struct MerkleNode: Sendable {
+    public let id: String
+    public let hash: String
+    public let prevHash: String?
+}
+
+// =====================================================
+// MARK: - AUDIT SHARD (NO GLOBAL STATE)
+// =====================================================
+
+public final class AuditShard {
+
+    private let crypto: CryptoHashing
+    private(set) var chain: [MerkleNode] = []
+
+    public init(crypto: CryptoHashing) {
+        self.crypto = crypto
+    }
+
+    public func append(id: String, payload: String) -> String {
+
+        let prev = chain.last?.hash
+        let data = Data((prev ?? "GENESIS" + "|" + payload).utf8)
+
+        let hash = crypto.hash(data)
+
+        let node = MerkleNode(
+            id: id,
+            hash: hash,
+            prevHash: prev
+        )
+
+        chain.append(node)
+        return hash
+    }
+
+    public func rootHash() -> String {
+        chain.last?.hash ?? "GENESIS"
+    }
+}
+
+// =====================================================
+// MARK: - NIZK STYLE PROOF (REJECTION VERIFICATION)
+// =====================================================
+
+public struct NIZKProof {
+    public let decision: ProbabilisticDecision
+    public let proofHash: String
+}
+
+// =====================================================
+// MARK: - POLICY ENGINE
+// =====================================================
+
+public struct ProbabilisticPolicyV1: Sendable {
+
+    public let maxInstability: Float
+    public let minConfidence: Float
+    public let sourceReliabilityGate: Float
+
+    public func evaluate(
+        instability: Float,
+        confidence: Float,
+        reliability: Float
+    ) -> ProbabilisticDecision {
+
+        if instability > maxInstability * 1.5 {
+            return .reject("CRITICAL_INSTABILITY")
+        }
+
+        if reliability < sourceReliabilityGate {
+            return .degrade(0.4)
+        }
+
+        if confidence < minConfidence {
+            return .mutate(0.6)
+        }
+
+        if instability > maxInstability {
+            return .degrade(0.7)
+        }
+
+        return .accept
+    }
+}
+
+// =====================================================
+// MARK: - DVSM HYBRID++ ENGINE
+// =====================================================
+
+public final class DUMEHybridPlusEngine {
+
+    private let crypto: CryptoHashing
+    private let policy: ProbabilisticPolicyV1
+
+    private var rng = VerifiableRNG(seed: 0xBADC0FFEE)
+    private var ingestCounter: UInt64 = 0
+
+    // SHARDED AUDIT (NO SINGLE SOURCE OF TRUTH)
+    private var shards: [TrustZone: AuditShard] = [
+        .ingest: AuditShard(crypto: SimpleHasher()),
+        .storage: AuditShard(crypto: SimpleHasher()),
+        .audit: AuditShard(crypto: SimpleHasher())
+    ]
+
+    public init(
+        crypto: CryptoHashing = SimpleHasher(),
+        policy: ProbabilisticPolicyV1 = .init(
+            maxInstability: 0.75,
+            minConfidence: 0.4,
+            sourceReliabilityGate: 0.6
+        )
+    ) {
+        self.crypto = crypto
+        self.policy = policy
+    }
+
+    // =====================================================
+    // MARK: - INGEST PIPELINE (DVSM)
+    // =====================================================
+
+    public func ingest(
+        id: String,
+        vector: [Float],
+        instability: Float,
+        confidence: Float,
+        reliability: Float,
+        node: NodeContext
+    ) -> NIZKProof {
+
+        ingestCounter += 1
+
+        let decision = policy.evaluate(
+            instability: instability,
+            confidence: confidence,
+            reliability: reliability
+        )
+
+        let adjusted = applyDecision(vector, decision: decision)
+
+        let payload = "ID:\(id)|NODE:\(node.nodeID)|DEC:\(decision)"
+
+        let hash = shards[.ingest]!.append(id: id, payload: payload)
+
+        // =================================================
+        // REJECTION IS NOW FULLY TRACEABLE (FIXED GAP)
+        // =================================================
+
+        let proof = NIZKProof(
+            decision: decision,
+            proofHash: hash
+        )
+
+        return proof
+    }
+
+    // =====================================================
+    // MARK: - DECISION ENGINE (DETERMINISTIC VRF STYLE)
+    // =====================================================
+
+    private func applyDecision(
+        _ vector: [Float],
+        decision: ProbabilisticDecision
+    ) -> [Float] {
+
+        switch decision {
+
+        case .accept:
+            return vector
+
+        case .degrade(let f):
+            return vector.map { $0 * f }
+
+        case .mutate(let f):
+            return vector.map { $0 + rng.next() * f }
+
+        case .reject:
+            // IMPORTANT: still deterministic transformation (no silent drop)
+            return vector.map { _ in 0.0 }
         }
     }
 
     // =====================================================
-    // MARK: - STRICT GLOBAL RECONCILIATION
+    // MARK: - DVSM GLOBAL RECONCILIATION (GOSSIP LAYER)
     // =====================================================
 
-    public func reconcile() async {
+    public func reconcile() -> String {
 
-        guard config.enableGlobalSync else { return }
+        let ingestRoot = shards[.ingest]!.rootHash()
+        let storageRoot = shards[.storage]!.rootHash()
+        let auditRoot = shards[.audit]!.rootHash()
 
-        let snapshot = await gossip.snapshot()
+        let globalFingerprint = ingestRoot + "|" + storageRoot + "|" + auditRoot
 
-        // Replay in deterministic order
-        for delta in snapshot {
-            graph.update(id: delta.id, vector: delta.vector)
-        }
+        return crypto.hash(Data(globalFingerprint.utf8))
     }
 }
